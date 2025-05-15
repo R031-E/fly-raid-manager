@@ -3,10 +3,13 @@
 #include <QApplication>
 #include <QLocale>
 #include <QTranslator>
+#include <flyintegration.h>
 
 int main(int argc, char *argv[])
 {
     QApplication a(argc, argv);
+
+    flyInit("2.0.0", QT_TRANSLATE_NOOP("Fly", "Управление RAID-массивами"));
 
     QTranslator translator;
     const QStringList uiLanguages = QLocale::system().uiLanguages();
