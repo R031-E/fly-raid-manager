@@ -6,40 +6,302 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>800</width>
-    <height>600</height>
+    <width>900</width>
+    <height>700</height>
    </rect>
   </property>
-  <property name="windowTitle">
-   <string>MainWindow</string>
+  <property name="minimumSize">
+   <size>
+    <width>800</width>
+    <height>600</height>
+   </size>
   </property>
-  <widget class="QWidget" name="centralwidget"/>
-  <widget class="QMenuBar" name="menubar">
+  <property name="windowTitle">
+   <string>RAID Manager</string>
+  </property>
+  <property name="windowIcon">
+   <iconset theme="drive-harddisk-raid">
+    <normaloff>.</normaloff>.</iconset>
+  </property>
+  <widget class="QWidget" name="centralWidget">
+   <layout class="QVBoxLayout" name="verticalLayout">
+    <item>
+     <widget class="QSplitter" name="splitterMain">
+      <property name="orientation">
+       <enum>Qt::Vertical</enum>
+      </property>
+      <widget class="QWidget" name="wdgTop">
+       <layout class="QVBoxLayout" name="verticalLayoutTop">
+        <item>
+         <layout class="QHBoxLayout" name="horizontalLayoutDeviceSelector">
+          <item>
+           <widget class="QLabel" name="lblDeviceSelector">
+            <property name="text">
+             <string>Device:</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QComboBox" name="cmbDevices">
+            <property name="sizePolicy">
+             <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+              <horstretch>0</horstretch>
+              <verstretch>0</verstretch>
+             </sizepolicy>
+            </property>
+            <property name="minimumSize">
+             <size>
+              <width>300</width>
+              <height>0</height>
+             </size>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QPushButton" name="btnRefreshDevices">
+            <property name="text">
+             <string>Update</string>
+            </property>
+            <property name="icon">
+             <iconset theme="view-refresh">
+              <normaloff>.</normaloff>.</iconset>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </item>
+        <item>
+         <widget class="QGraphicsView" name="gvDeviceLayout">
+          <property name="sizePolicy">
+           <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
+            <horstretch>0</horstretch>
+            <verstretch>1</verstretch>
+           </sizepolicy>
+          </property>
+          <property name="minimumSize">
+           <size>
+            <width>0</width>
+            <height>120</height>
+           </size>
+          </property>
+          <property name="toolTip">
+           <string>Graphical view of disk partitions</string>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </widget>
+      <widget class="QWidget" name="wdgBottom">
+       <layout class="QVBoxLayout" name="verticalLayoutBottom">
+        <item>
+         <widget class="QLabel" name="lblDeviceInfo">
+          <property name="text">
+           <string>About device:</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QTreeView" name="treeDeviceInfo">
+          <property name="sizePolicy">
+           <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
+            <horstretch>0</horstretch>
+            <verstretch>2</verstretch>
+           </sizepolicy>
+          </property>
+          <property name="minimumSize">
+           <size>
+            <width>0</width>
+            <height>200</height>
+           </size>
+          </property>
+          <property name="alternatingRowColors">
+           <bool>true</bool>
+          </property>
+          <property name="rootIsDecorated">
+           <bool>true</bool>
+          </property>
+          <property name="itemsExpandable">
+           <bool>true</bool>
+          </property>
+          <property name="sortingEnabled">
+           <bool>true</bool>
+          </property>
+          <property name="animated">
+           <bool>true</bool>
+          </property>
+          <property name="wordWrap">
+           <bool>false</bool>
+          </property>
+          <attribute name="headerVisible">
+           <bool>false</bool>
+          </attribute>
+          <attribute name="headerCascadingSectionResizes">
+           <bool>true</bool>
+          </attribute>
+          <attribute name="headerStretchLastSection">
+           <bool>true</bool>
+          </attribute>
+         </widget>
+        </item>
+        <item>
+         <widget class="QTabWidget" name="tabDetails">
+          <property name="currentIndex">
+           <number>0</number>
+          </property>
+          <widget class="QWidget" name="tabInfo">
+           <attribute name="title">
+            <string>Information</string>
+           </attribute>
+           <layout class="QVBoxLayout" name="verticalLayout_2">
+            <item>
+             <widget class="QTextEdit" name="txtDeviceDetails">
+              <property name="readOnly">
+               <bool>true</bool>
+              </property>
+             </widget>
+            </item>
+           </layout>
+          </widget>
+          <widget class="QWidget" name="tabLog">
+           <attribute name="title">
+            <string>Operations log</string>
+           </attribute>
+           <layout class="QVBoxLayout" name="verticalLayout_3">
+            <item>
+             <widget class="QTextEdit" name="txtOperationLog">
+              <property name="readOnly">
+               <bool>true</bool>
+              </property>
+             </widget>
+            </item>
+           </layout>
+          </widget>
+         </widget>
+        </item>
+       </layout>
+      </widget>
+     </widget>
+    </item>
+   </layout>
+  </widget>
+  <widget class="QMenuBar" name="menuBar">
    <property name="geometry">
     <rect>
      <x>0</x>
      <y>0</y>
-     <width>800</width>
+     <width>900</width>
      <height>22</height>
     </rect>
    </property>
-   <widget class="QMenu" name="menuTest_Text">
+   <widget class="QMenu" name="menuFile">
     <property name="title">
      <string>File</string>
     </property>
-    <addaction name="actionUpdate_list_of_devices"/>
+    <addaction name="actionRefresh"/>
     <addaction name="separator"/>
     <addaction name="actionExit"/>
    </widget>
-   <addaction name="menuTest_Text"/>
+   <widget class="QMenu" name="menuEdit">
+    <property name="title">
+     <string>Правка</string>
+    </property>
+    <addaction name="actionSettings"/>
+   </widget>
+   <widget class="QMenu" name="menuView">
+    <property name="title">
+     <string>View</string>
+    </property>
+    <addaction name="actionRefresh"/>
+    <addaction name="actionShowDetails"/>
+   </widget>
+   <widget class="QMenu" name="menuRaid">
+    <property name="title">
+     <string>RAID</string>
+    </property>
+    <addaction name="actionCreateRaid"/>
+    <addaction name="actionDestroyRaid"/>
+    <addaction name="separator"/>
+    <addaction name="actionAddDevice"/>
+    <addaction name="actionRemoveDevice"/>
+    <addaction name="separator"/>
+    <addaction name="actionRepairRaid"/>
+   </widget>
+   <widget class="QMenu" name="menuPartition">
+    <property name="title">
+     <string>Partition</string>
+    </property>
+    <addaction name="actionCreatePartition"/>
+    <addaction name="actionDeletePartition"/>
+    <addaction name="separator"/>
+    <addaction name="actionFormatPartition"/>
+    <addaction name="separator"/>
+    <addaction name="actionMountPartition"/>
+    <addaction name="actionUnmountPartition"/>
+   </widget>
+   <widget class="QMenu" name="menuHelp">
+    <property name="title">
+     <string>Help</string>
+    </property>
+    <addaction name="actionHelp"/>
+    <addaction name="actionAbout"/>
+   </widget>
+   <addaction name="menuFile"/>
+   <addaction name="menuEdit"/>
+   <addaction name="menuView"/>
+   <addaction name="menuRaid"/>
+   <addaction name="menuPartition"/>
+   <addaction name="menuHelp"/>
   </widget>
-  <widget class="QStatusBar" name="statusbar"/>
-  <action name="actionUpdate_list_of_devices">
-   <property name="text">
-    <string>Update list of devices</string>
+  <widget class="QToolBar" name="mainToolBar">
+   <property name="windowTitle">
+    <string>Tool bar</string>
    </property>
-  </action>
+   <property name="movable">
+    <bool>false</bool>
+   </property>
+   <property name="allowedAreas">
+    <set>Qt::TopToolBarArea</set>
+   </property>
+   <property name="iconSize">
+    <size>
+     <width>24</width>
+     <height>24</height>
+    </size>
+   </property>
+   <property name="toolButtonStyle">
+    <enum>Qt::ToolButtonTextUnderIcon</enum>
+   </property>
+   <property name="floatable">
+    <bool>false</bool>
+   </property>
+   <attribute name="toolBarArea">
+    <enum>TopToolBarArea</enum>
+   </attribute>
+   <attribute name="toolBarBreak">
+    <bool>false</bool>
+   </attribute>
+   <addaction name="actionRefresh"/>
+   <addaction name="separator"/>
+   <addaction name="actionCreateRaid"/>
+   <addaction name="actionDestroyRaid"/>
+   <addaction name="actionRepairRaid"/>
+   <addaction name="separator"/>
+   <addaction name="actionCreatePartition"/>
+   <addaction name="actionFormatPartition"/>
+   <addaction name="separator"/>
+   <addaction name="actionMountPartition"/>
+   <addaction name="actionUnmountPartition"/>
+  </widget>
+  <widget class="QStatusBar" name="statusBar">
+   <property name="sizeGripEnabled">
+    <bool>true</bool>
+   </property>
+  </widget>
   <action name="actionExit">
+   <property name="icon">
+    <iconset theme="application-exit">
+     <normaloff>.</normaloff>.</iconset>
+   </property>
    <property name="text">
     <string>Exit</string>
    </property>
@@ -47,7 +309,155 @@
     <string>Ctrl+Q</string>
    </property>
   </action>
+  <action name="actionRefresh">
+   <property name="icon">
+    <iconset theme="view-refresh">
+     <normaloff>.</normaloff>.</iconset>
+   </property>
+   <property name="text">
+    <string>Update</string>
+   </property>
+   <property name="shortcut">
+    <string>F5</string>
+   </property>
+  </action>
+  <action name="actionSettings">
+   <property name="icon">
+    <iconset theme="preferences-system">
+     <normaloff>.</normaloff>.</iconset>
+   </property>
+   <property name="text">
+    <string>Settings</string>
+   </property>
+  </action>
+  <action name="actionShowDetails">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="checked">
+    <bool>true</bool>
+   </property>
+   <property name="icon">
+    <iconset theme="dialog-information">
+     <normaloff>.</normaloff>.</iconset>
+   </property>
+   <property name="text">
+    <string>Show details</string>
+   </property>
+  </action>
+  <action name="actionCreateRaid">
+   <property name="icon">
+    <iconset theme="list-add">
+     <normaloff>.</normaloff>.</iconset>
+   </property>
+   <property name="text">
+    <string>Create RAID</string>
+   </property>
+  </action>
+  <action name="actionDestroyRaid">
+   <property name="icon">
+    <iconset theme="list-remove">
+     <normaloff>.</normaloff>.</iconset>
+   </property>
+   <property name="text">
+    <string>Delete RAID</string>
+   </property>
+  </action>
+  <action name="actionAddDevice">
+   <property name="icon">
+    <iconset theme="list-add">
+     <normaloff>.</normaloff>.</iconset>
+   </property>
+   <property name="text">
+    <string>Add device</string>
+   </property>
+  </action>
+  <action name="actionRemoveDevice">
+   <property name="icon">
+    <iconset theme="list-remove">
+     <normaloff>.</normaloff>.</iconset>
+   </property>
+   <property name="text">
+    <string>Remove device</string>
+   </property>
+  </action>
+  <action name="actionRepairRaid">
+   <property name="icon">
+    <iconset theme="tools-check-spelling">
+     <normaloff>.</normaloff>.</iconset>
+   </property>
+   <property name="text">
+    <string>Repair RAID</string>
+   </property>
+  </action>
+  <action name="actionCreatePartition">
+   <property name="icon">
+    <iconset theme="document-new">
+     <normaloff>.</normaloff>.</iconset>
+   </property>
+   <property name="text">
+    <string>Create partition</string>
+   </property>
+  </action>
+  <action name="actionDeletePartition">
+   <property name="icon">
+    <iconset theme="edit-delete">
+     <normaloff>.</normaloff>.</iconset>
+   </property>
+   <property name="text">
+    <string>Delete partition</string>
+   </property>
+  </action>
+  <action name="actionFormatPartition">
+   <property name="icon">
+    <iconset theme="edit-clear">
+     <normaloff>.</normaloff>.</iconset>
+   </property>
+   <property name="text">
+    <string>Format</string>
+   </property>
+  </action>
+  <action name="actionMountPartition">
+   <property name="icon">
+    <iconset theme="media-mount">
+     <normaloff>.</normaloff>.</iconset>
+   </property>
+   <property name="text">
+    <string>Mount</string>
+   </property>
+  </action>
+  <action name="actionUnmountPartition">
+   <property name="icon">
+    <iconset theme="media-eject">
+     <normaloff>.</normaloff>.</iconset>
+   </property>
+   <property name="text">
+    <string>Dismount</string>
+   </property>
+  </action>
+  <action name="actionHelp">
+   <property name="icon">
+    <iconset theme="help-contents">
+     <normaloff>.</normaloff>.</iconset>
+   </property>
+   <property name="text">
+    <string>Содержание</string>
+   </property>
+   <property name="shortcut">
+    <string>F1</string>
+   </property>
+  </action>
+  <action name="actionAbout">
+   <property name="icon">
+    <iconset theme="help-about">
+     <normaloff>.</normaloff>.</iconset>
+   </property>
+   <property name="text">
+    <string>About</string>
+   </property>
+  </action>
  </widget>
+ <layoutdefault spacing="6" margin="11"/>
  <resources/>
  <connections/>
 </ui>
