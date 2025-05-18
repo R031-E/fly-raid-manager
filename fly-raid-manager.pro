@@ -8,10 +8,16 @@ LIBS += -lflyintegration -lflyqtconfig -lflycore -lflyuiaux -lflyuiextra -lflypt
 INCLUDEPATH += /usr/include/fly
 
 SOURCES += \
+    commandexecutor.cpp \
+    diskmanager.cpp \
+    diskstructures.cpp \
     main.cpp \
     mainwindow.cpp
 
 HEADERS += \
+    commandexecutor.h \
+    diskmanager.h \
+    diskstructures.h \
     mainwindow.h
 
 FORMS += \
