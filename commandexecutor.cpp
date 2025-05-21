@@ -44,7 +44,7 @@ bool CommandExecutor::executeAsAdmin(const QString &command, const QStringList &
     QStringList fullArgs;
     fullArgs << command << args;
 
-    m_process->start("pkexec", fullArgs);
+    m_process->start("sudo", fullArgs);
     return m_process->waitForStarted();
 }
 
@@ -69,7 +69,7 @@ int CommandExecutor::executeAsAdminSync(const QString &command, const QStringLis
     process.start("pkexec", fullArgs);
 
     if (!process.waitForStarted()) {
-        qWarning() << "Не удалось запустить команду с fly-su:" << command;
+        qWarning() << "Не удалось запустить команду с повышенными привелегиями:" << command;
         return -1;
     }
 
@@ -119,21 +119,25 @@ bool CommandExecutor::hasAdminRights()
 void CommandExecutor::handleStandardOutput()
 {
     QByteArray data = m_process->readAllStandardOutput();
+    qDebug() << "Есть вывод";
     emit outputAvailable(QString::fromUtf8(data));
 }
 
 void CommandExecutor::handleErrorOutput()
 {
     QByteArray data = m_process->readAllStandardError();
+    qDebug() << "Есть ошибка";
     emit errorOutputAvailable(QString::fromUtf8(data));
 }
 
 void CommandExecutor::handleFinished(int exitCode, QProcess::ExitStatus exitStatus)
 {
+    qDebug() << "Процесс завершился";
     emit finished(exitCode, exitStatus);
 }
 
 void CommandExecutor::handleError(QProcess::ProcessError error)
 {
+    qDebug() << "Ошибка";
     emit this->error(error);
 }
