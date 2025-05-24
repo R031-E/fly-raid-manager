@@ -397,6 +397,7 @@
    <addaction name="actionRepairRaid"/>
    <addaction name="separator"/>
    <addaction name="actionCreatePartition"/>
+   <addaction name="actionDeletePartition"/>
    <addaction name="actionFormatPartition"/>
    <addaction name="actionCreatePartitionTable"/>
    <addaction name="separator"/>

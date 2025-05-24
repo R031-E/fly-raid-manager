@@ -43,7 +43,7 @@ bool CommandExecutor::executeAsAdmin(const QString &command, const QStringList &
     }
     QStringList fullArgs;
     fullArgs << command << args;
-
+    qDebug() << fullArgs;
     m_process->start("sudo", fullArgs);
     return m_process->waitForStarted();
 }

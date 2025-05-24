@@ -6,6 +6,7 @@
 #include "diskmanager.h"
 #include "partitiontabledialog.h"
 #include "createpartitiondialog.h"
+#include "deletepartitiondialog.h"
 
 namespace Ui {
 class MainWindow;
@@ -37,8 +38,10 @@ private slots:
     void onAddToRaidClicked();
     void onRemoveFromRaidClicked();
 
+    // Слоты для операций с разделами
     void onCreatePartitionTableClicked();
     void onCreatePartitionClicked();
+    void onDeletePartitionClicked();
 
 private:
     Ui::MainWindow *ui;
@@ -68,6 +71,12 @@ private:
 
     // Обновление доступности кнопок в зависимости от выбранного элемента
     void updateButtonState();
+
+    // Проверка, является ли выбранный элемент разделом
+    bool isSelectedItemPartition() const;
+
+    // Получение пути к выбранному разделу
+    QString getSelectedPartitionPath() const;
 };
 
 #endif // MAINWINDOW_H

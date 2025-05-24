@@ -34,6 +34,14 @@ MainWindow::MainWindow(QWidget *parent) :
                     ui->statusBar->showMessage(tr("Failed to create partition"), 3000);
                 }
             });
+    connect(m_diskManager, &DiskManager::partitionDeleted,
+            this, [this](bool success) {
+                if (success) {
+                    ui->statusBar->showMessage(tr("Partition deleted successfully"), 3000);
+                } else {
+                    ui->statusBar->showMessage(tr("Failed to delete partition"), 3000);
+                }
+            });
 
     // Подключаем сигналы интерфейса
     connect(ui->btnRefreshDevices, &QPushButton::clicked,
@@ -46,6 +54,8 @@ MainWindow::MainWindow(QWidget *parent) :
             this, &MainWindow::onCreatePartitionTableClicked);
     connect(ui->actionCreatePartition, &QAction::triggered,
             this, &MainWindow::onCreatePartitionClicked);
+    connect(ui->actionDeletePartition, &QAction::triggered,
+            this, &MainWindow::onDeletePartitionClicked);
 
     // Подключаем кнопки управления RAID
     connect(ui->btnMarkFaulty, &QPushButton::clicked,
@@ -54,6 +64,10 @@ MainWindow::MainWindow(QWidget *parent) :
             this, &MainWindow::onAddToRaidClicked);
     connect(ui->btnRemoveFromRaid, &QPushButton::clicked,
             this, &MainWindow::onRemoveFromRaidClicked);
+
+    // Подключаем сигнал изменения выбора в дереве для обновления кнопок
+    connect(ui->treeDevices, &QTreeWidget::currentItemChanged,
+            this, &MainWindow::updateButtonState);
 
     // Настраиваем интерфейс
     updateInterface();
@@ -152,6 +166,186 @@ void MainWindow::onRemoveFromRaidClicked()
                            tr("Would remove device %1 from RAID").arg(devicePath));
 
     // Тут в будущем будет функциональность удаления устройства из RAID
+}
+
+void MainWindow::onCreatePartitionTableClicked()
+{
+    // Получаем выбранный элемент
+    QTreeWidgetItem *item = ui->treeDevices->currentItem();
+    if (!item) {
+        QMessageBox::warning(this, tr("No Device Selected"),
+                            tr("Please select a disk to create a partition table."));
+        return;
+    }
+
+    // Получаем путь к устройству
+    QString devicePath = item->text(0);
+
+    // Проверяем, является ли выбранное устройство диском
+    bool isDisk = devicePath.contains("/dev/sd") || devicePath.contains("/dev/nvme") ||
+                  devicePath.contains("/dev/vd") || devicePath.contains("/dev/hd");
+
+    if (!isDisk || item->parent() != nullptr) {
+        QMessageBox::warning(this, tr("Invalid Selection"),
+                            tr("Please select a disk, not a partition or RAID array."));
+        return;
+    }
+
+    // Создаем и показываем диалог
+    PartitionTableDialog *dialog = new PartitionTableDialog(devicePath, this);
+    if (dialog->exec() == QDialog::Accepted) {
+        // Получаем выбранный тип таблицы разделов
+        QString tableType = dialog->selectedTableType();
+
+        // Запрашиваем подтверждение
+        QMessageBox::StandardButton reply;
+        reply = QMessageBox::question(this, tr("Confirm Action"),
+                                     tr("Are you sure you want to create a new %1 partition table on %2?\n\n"
+                                        "All existing data on the disk will be lost!")
+                                         .arg(tableType.toUpper())
+                                         .arg(devicePath),
+                                     QMessageBox::Yes | QMessageBox::No);
+
+        if (reply == QMessageBox::Yes) {
+            // Создаем таблицу разделов
+            m_diskManager->createPartitionTable(devicePath, tableType);
+        }
+    }
+    dialog->deleteLater();
+}
+
+void MainWindow::onCreatePartitionClicked()
+{
+    // Получаем выбранный элемент
+    QTreeWidgetItem *item = ui->treeDevices->currentItem();
+    if (!item) {
+        QMessageBox::warning(this, tr("No Device Selected"),
+                            tr("Please select a disk to create a partition."));
+        return;
+    }
+
+    // Получаем путь к устройству
+    QString devicePath = item->text(0);
+
+    // Проверяем, является ли выбранное устройство диском
+    bool isDisk = devicePath.contains("/dev/sd") || devicePath.contains("/dev/nvme") ||
+                  devicePath.contains("/dev/vd") || devicePath.contains("/dev/hd");
+
+    if (!isDisk || item->parent() != nullptr) {
+        QMessageBox::warning(this, tr("Invalid Selection"),
+                            tr("Please select a disk, not a partition or RAID array."));
+        return;
+    }
+
+    // Создаем диалог создания раздела
+    CreatePartitionDialog *dialog = new CreatePartitionDialog(devicePath, this);
+
+    // Подключаем сигнал для получения информации о свободном пространстве
+    connect(m_diskManager, &DiskManager::freeSpaceOnDeviceInfoReceived,
+            dialog, &CreatePartitionDialog::onFreeSpaceInfoOnDeviceReceived);
+
+    // Запрашиваем информацию о свободном пространстве
+    m_diskManager->getFreeSpaceOnDeviceInfo(devicePath);
+
+    // Показываем диалог
+    if (dialog->exec() == QDialog::Accepted) {
+        // Дополнительная валидация перед созданием раздела
+        if (dialog->validateInput()) {
+            // Получаем данные из диалога
+            QString partitionType = dialog->getPartitionType();
+            QString filesystemType = dialog->getFilesystemType();
+            QString startSize = dialog->getStartSize();
+            QString endSize = dialog->getEndSize();
+
+            // Запрашиваем подтверждение
+            QMessageBox::StandardButton reply;
+            reply = QMessageBox::question(this, tr("Confirm Partition Creation"),
+                                         tr("Create %1 partition from %2 to %3?\n\n"
+                                            "Partition type: %4\n"
+                                            "Filesystem: %5")
+                                             .arg(partitionType)
+                                             .arg(startSize)
+                                             .arg(endSize)
+                                             .arg(partitionType)
+                                             .arg(filesystemType),
+                                         QMessageBox::Yes | QMessageBox::No);
+
+            if (reply == QMessageBox::Yes) {
+                // Создаем раздел
+                m_diskManager->createPartition(devicePath, partitionType, filesystemType,
+                                              startSize, endSize);
+            }
+        }
+    }
+
+    dialog->deleteLater();
+}
+
+void MainWindow::onDeletePartitionClicked()
+{
+    // Получаем выбранный элемент
+    QTreeWidgetItem *item = ui->treeDevices->currentItem();
+    if (!item) {
+        QMessageBox::warning(this, tr("No Partition Selected"),
+                            tr("Please select a partition to delete."));
+        return;
+    }
+
+    // Проверяем, является ли выбранное устройство разделом
+    if (!isSelectedItemPartition()) {
+        QMessageBox::warning(this, tr("Invalid Selection"),
+                            tr("Please select a partition, not a disk or RAID array."));
+        return;
+    }
+
+    QString partitionPath = getSelectedPartitionPath();
+    if (partitionPath.isEmpty()) {
+        QMessageBox::warning(this, tr("Invalid Partition"),
+                            tr("Cannot determine partition path."));
+        return;
+    }
+
+    // Проверяем, не смонтирован ли раздел
+    QString mountPoint = item->text(5); // Колонка Mount Point
+    if (!mountPoint.isEmpty()) {
+        QMessageBox::warning(this, tr("Partition is Mounted"),
+                            tr("Cannot delete partition %1 because it is currently mounted at %2.\n\n"
+                               "Please unmount the partition first.")
+                               .arg(partitionPath)
+                               .arg(mountPoint));
+        return;
+    }
+
+    // Создаем и показываем диалог подтверждения
+    DeletePartitionDialog *dialog = new DeletePartitionDialog(partitionPath, this);
+    if (dialog->exec() == QDialog::Accepted && dialog->isConfirmed()) {
+        // Удаляем раздел
+        m_diskManager->deletePartition(partitionPath);
+    }
+    dialog->deleteLater();
+}
+
+bool MainWindow::isSelectedItemPartition() const
+{
+    QTreeWidgetItem *item = ui->treeDevices->currentItem();
+    if (!item) {
+        return false;
+    }
+
+    // Раздел должен иметь родительский элемент (диск) и содержать цифры в конце пути
+    QString devicePath = item->text(0);
+    return item->parent() != nullptr &&
+           devicePath.contains(QRegularExpression("/dev/[a-z]+[0-9]+$"));
+}
+
+QString MainWindow::getSelectedPartitionPath() const
+{
+    QTreeWidgetItem *item = ui->treeDevices->currentItem();
+    if (!item) {
+        return QString();
+    }
+
+    return item->text(0);
 }
 
 void MainWindow::updateInterface()
@@ -295,7 +489,7 @@ QTreeWidgetItem* MainWindow::addRaidToTree(const RaidInfo &raid)
         item->setText(3, raid.state);
         item->setText(4, raid.mountPoint);
         item->setText(5, raid.filesystem);
-        item->setText(6, QString::number(raid.syncPercent) + "%");
+        item->setText(6, tr("%1%").arg(raid.syncPercent));
     }
 
     // Иконка для RAID
@@ -327,119 +521,6 @@ QTreeWidgetItem* MainWindow::addRaidMemberToTree(QTreeWidgetItem* parentItem, co
     return item;
 }
 
-void MainWindow::onCreatePartitionTableClicked()
-{
-    // Получаем выбранный элемент
-    QTreeWidgetItem *item = ui->treeDevices->currentItem();
-    if (!item) {
-        QMessageBox::warning(this, tr("No Device Selected"),
-                            tr("Please select a disk to create a partition table."));
-        return;
-    }
-
-    // Получаем путь к устройству
-    QString devicePath = item->text(0);
-
-    // Проверяем, является ли выбранное устройство диском
-    bool isDisk = devicePath.contains("/dev/sd") || devicePath.contains("/dev/nvme") ||
-                  devicePath.contains("/dev/vd") || devicePath.contains("/dev/hd");
-
-    if (!isDisk || item->parent() != nullptr) {
-        QMessageBox::warning(this, tr("Invalid Selection"),
-                            tr("Please select a disk, not a partition or RAID array."));
-        return;
-    }
-
-    // Создаем и показываем диалог
-    PartitionTableDialog dialog(devicePath, this);
-    if (dialog.exec() == QDialog::Accepted) {
-        // Получаем выбранный тип таблицы разделов
-        QString tableType = dialog.selectedTableType();
-
-        // Запрашиваем подтверждение
-        QMessageBox::StandardButton reply;
-        reply = QMessageBox::question(this, tr("Confirm Action"),
-                                     tr("Are you sure you want to create a new %1 partition table on %2?\n\n"
-                                        "All existing data on the disk will be lost!")
-                                         .arg(tableType.toUpper())
-                                         .arg(devicePath),
-                                     QMessageBox::Yes | QMessageBox::No);
-
-        if (reply == QMessageBox::Yes) {
-            // Создаем таблицу разделов
-            m_diskManager->createPartitionTable(devicePath, tableType);
-        }
-    }
-}
-
-void MainWindow::onCreatePartitionClicked()
-{
-    // Получаем выбранный элемент
-    QTreeWidgetItem *item = ui->treeDevices->currentItem();
-    if (!item) {
-        QMessageBox::warning(this, tr("No Device Selected"),
-                           tr("Please select a disk to create a partition."));
-        return;
-    }
-
-    // Получаем путь к устройству
-    QString devicePath = item->text(0);
-
-    // Определение типа устройства для создания раздела
-    bool canCreatePartition = false;
-
-    // Проверяем, является ли выбранное устройство диском
-    bool isDisk = devicePath.contains("/dev/sd") || devicePath.contains("/dev/nvme") ||
-                 devicePath.contains("/dev/vd") || devicePath.contains("/dev/hd");
-
-    // Проверяем, является ли выбранное устройство разделом типа "extended"
-    bool isExtendedPartition = false;
-    if (item->parent() && item->text(6).contains("extended", Qt::CaseInsensitive)) {
-        isExtendedPartition = true;
-    }
-
-    // Можно создать раздел на диске или в расширенном разделе
-    canCreatePartition = (isDisk && item->parent() == nullptr) || isExtendedPartition;
-
-    if (!canCreatePartition) {
-        QMessageBox::warning(this, tr("Invalid Selection"),
-                           tr("Partitions can only be created on disks or inside extended partitions."));
-        return;
-    }
-
-    // Создаем и показываем диалог
-    CreatePartitionDialog dialog(devicePath, this);
-    if (dialog.exec() == QDialog::Accepted) {
-        // Получаем параметры раздела
-        QString partType = dialog.partitionType();
-        QString start = dialog.startPosition();
-        QString end = dialog.endPosition();
-        QString fs = dialog.fileSystem();
-
-        // Если это разодел на расширенном разделе, то тип должен быть logical
-        if (isExtendedPartition) {
-            partType = "logical";
-        }
-
-        // Запрашиваем подтверждение
-        QMessageBox::StandardButton reply;
-        reply = QMessageBox::question(this, tr("Confirm Action"),
-                                     tr("Are you sure you want to create a new %1 partition on %2?\n\n"
-                                        "Start: %3\nEnd: %4\nFilesystem: %5")
-                                      .arg(partType)
-                                      .arg(devicePath)
-                                      .arg(start)
-                                      .arg(end)
-                                      .arg(fs),
-                                     QMessageBox::Yes | QMessageBox::No);
-
-        if (reply == QMessageBox::Yes) {
-            // Создаем раздел
-            m_diskManager->createPartition(devicePath, partType, start, end, fs);
-        }
-    }
-}
-
 void MainWindow::updateButtonState()
 {
     // Получаем выбранный элемент
@@ -450,6 +531,11 @@ void MainWindow::updateButtonState()
     ui->btnAddToRaid->setEnabled(false);
     ui->btnRemoveFromRaid->setEnabled(false);
 
+    // Обновляем доступность действий в меню
+    ui->actionDeletePartition->setEnabled(false);
+    ui->actionCreatePartition->setEnabled(false);
+    ui->actionCreatePartitionTable->setEnabled(false);
+
     if (!item) {
         return;
     }
@@ -457,14 +543,25 @@ void MainWindow::updateButtonState()
     // Получаем путь к устройству
     QString devicePath = item->text(0);
 
-    // Проверяем, является ли выбранное устройство разделом
-    bool isPartition = devicePath.contains("sd") && devicePath.length() > 8;
-
-    // Проверяем, является ли выбранное устройство RAID-массивом
+    // Проверяем тип выбранного элемента
+    bool isDisk = (devicePath.contains("/dev/sd") || devicePath.contains("/dev/nvme") ||
+                   devicePath.contains("/dev/vd") || devicePath.contains("/dev/hd")) &&
+                  item->parent() == nullptr;
+    bool isPartition = isSelectedItemPartition();
     bool isRaid = devicePath.contains("md");
-
-    // Проверяем, является ли выбранное устройство частью RAID
     bool isRaidMember = item->parent() && item->parent()->text(0).contains("md");
+
+    // Активируем действия для дисков
+    if (isDisk) {
+        ui->actionCreatePartition->setEnabled(true);
+        ui->actionCreatePartitionTable->setEnabled(true);
+    }
+
+    // Активируем действие удаления для разделов (не смонтированных)
+    if (isPartition) {
+        QString mountPoint = item->text(5); // Колонка Mount Point
+        ui->actionDeletePartition->setEnabled(mountPoint.isEmpty());
+    }
 
     // Кнопка "Пометить как неисправное" доступна только для устройств в RAID
     ui->btnMarkFaulty->setEnabled(isRaidMember);

@@ -59,6 +59,10 @@ void DiskManager::handleCommandOutput(const QString &output)
         // Это вывод mdadm --detail /dev/mdX
         parseMdadmDetailOutput(output);
         break;
+    case CommandType::GET_FREE_SPACE_ON_DEVICE:
+        // Это вывод parted print free
+        emit freeSpaceOnDeviceInfoReceived(output);
+        break;
     default:
         break;
     }
@@ -67,7 +71,7 @@ void DiskManager::handleCommandOutput(const QString &output)
 void DiskManager::handleCommandErrorOutput(const QString &error)
 {
     // Просто передаем ошибку для отображения
-    emit commandOutput("ERROR: " + error);
+    emit commandOutput(tr("ERROR: %1").arg(error));
 }
 
 void DiskManager::handleCommandFinished(int exitCode, QProcess::ExitStatus exitStatus)
@@ -160,6 +164,20 @@ void DiskManager::handleCommandFinished(int exitCode, QProcess::ExitStatus exitS
         refreshDevices();
         break;
 
+    case CommandType::DELETE_PARTITION:
+        // После удаления раздела обновляем список устройств
+        emit partitionDeleted(exitCode == 0 && exitStatus == QProcess::NormalExit);
+        if (exitCode == 0 && exitStatus == QProcess::NormalExit) {
+            emit commandOutput(tr("Partition deleted successfully"));
+        } else {
+            emit commandOutput(tr("Failed to delete partition"));
+        }
+        refreshDevices();
+        break;
+
+    case CommandType::GET_FREE_SPACE_ON_DEVICE:
+        break;
+
     default:
         emit devicesRefreshed(true);
         break;
@@ -168,7 +186,6 @@ void DiskManager::handleCommandFinished(int exitCode, QProcess::ExitStatus exitS
 
 void DiskManager::createPartitionTable(const QString &devicePath, const QString &tableType)
 {
-
     QStringList args;
     args << "-s";
     args << devicePath;
@@ -185,23 +202,24 @@ void DiskManager::createPartitionTable(const QString &devicePath, const QString 
     }
 }
 
-void DiskManager::createPartition(const QString &devicePath, const QString &partType,
-                                 const QString &start, const QString &end,
-                                 const QString &filesystem)
+void DiskManager::createPartition(const QString &devicePath, const QString &partitionType,
+                                 const QString &filesystemType, const QString &startSize,
+                                 const QString &endSize)
 {
-    // Создаем команду для parted
+    // Создаем команду для parted с единицами МиБ
     QStringList args;
-    args << "-s";
+    args << "-s"; // режим без вопросов
     args << devicePath;
     args << "mkpart";
-    args << partType;
+    args << partitionType;
 
-    if (partType != "extended") {
-        args << filesystem;
+    // Добавляем тип файловой системы только если он указан
+    if (!filesystemType.isEmpty() && filesystemType != "unformatted") {
+        args << filesystemType;
     }
 
-    args << start;
-    args << end;
+    args << startSize;
+    args << endSize;
 
     // Устанавливаем тип команды
     m_currentCommand = CommandType::CREATE_PARTITION;
@@ -210,6 +228,62 @@ void DiskManager::createPartition(const QString &devicePath, const QString &part
     if (!m_commandExecutor->executeAsAdmin("parted", args)) {
         qWarning() << "Failed to run parted command for creating partition";
         emit partitionCreated(false);
+    }
+}
+
+void DiskManager::deletePartition(const QString &partitionPath)
+{
+    // Извлекаем номер раздела из пути (например /dev/sda1 -> 1)
+    QRegularExpression partitionRegex(".*?([0-9]+)$");
+    QRegularExpressionMatch match = partitionRegex.match(partitionPath);
+
+    if (!match.hasMatch()) {
+        qWarning() << "Invalid partition path:" << partitionPath;
+        emit partitionDeleted(false);
+        return;
+    }
+
+    QString partitionNumber = match.captured(1);
+
+    // Извлекаем путь к диску (убираем номер раздела)
+    QString diskPath = partitionPath;
+    diskPath.remove(QRegularExpression("[0-9]+$"));
+
+    // Создаем команду для parted
+    QStringList args;
+    args << "-s"; // режим без вопросов
+    args << diskPath;
+    args << "rm"; // команда удаления
+    args << partitionNumber;
+
+    // Устанавливаем тип команды
+    m_currentCommand = CommandType::DELETE_PARTITION;
+
+    qDebug() << "Deleting partition:" << partitionNumber << "from disk:" << diskPath;
+
+    // Запускаем parted с правами администратора
+    if (!m_commandExecutor->executeAsAdmin("parted", args)) {
+        qWarning() << "Failed to run parted command for deleting partition";
+        emit partitionDeleted(false);
+    }
+}
+
+void DiskManager::getFreeSpaceOnDeviceInfo(const QString &devicePath)
+{
+    // Создаем команду для получения информации о разделах в МиБ
+    QStringList args;
+    args << "-s";
+    args << devicePath;
+    args << "unit" << "MiB";  // Указываем единицы измерения сразу в МиБ
+    args << "print";
+    args << "free";
+
+    // Устанавливаем тип команды
+    m_currentCommand = CommandType::GET_FREE_SPACE_ON_DEVICE;
+
+    // Запускаем parted с правами администратора
+    if (!m_commandExecutor->executeAsAdmin("parted", args)) {
+        qDebug() << "Failed to run parted command for getting free space info";
     }
 }
 
@@ -303,7 +377,7 @@ void DiskManager::parseMdadmScanOutput(const QString &output)
             }
 
             // По умолчанию считаем активным
-            raid.state = "active";
+            raid.state = tr("active");
 
             // Добавляем RAID в структуру
             m_diskStructure.addRaid(raid);
@@ -387,6 +461,8 @@ void DiskManager::parseMdadmDetailOutput(const QString &output)
                         member.status = DeviceStatus::SPARE;
                     } else if (status.contains("rebuilding")) {
                         member.status = DeviceStatus::REBUILDING;
+                    } else if (status.contains("sync")) {
+                        member.status = DeviceStatus::SYNCING;
                     }
 
                     raid.members.append(member);
@@ -407,25 +483,28 @@ void DiskManager::parseDfOutput(const QString &output)
 
 qint64 DiskManager::sizeStringToBytes(const QString &sizeStr)
 {
-    // Конвертация строки размера (например, '1G', '500M') в байты
-    QRegularExpression rx("(\\d+(?:\\.\\d+)?)\\s*([KMGT])?");
-    QRegularExpressionMatch match = rx.match(sizeStr);
+    // Конвертация строки размера в байты (поддержка бинарных единиц)
+    QRegularExpression rx("(\\d+(?:\\.\\d+)?)\\s*([KMGTPE]i?B?)?", QRegularExpression::CaseInsensitiveOption);
+    QRegularExpressionMatch match = rx.match(sizeStr.trimmed());
 
     if (!match.hasMatch()) {
         return 0;
     }
 
     double size = match.captured(1).toDouble();
-    QString unit = match.captured(2);
+    QString unit = match.captured(2).toUpper();
 
-    if (unit == "K") {
+    // Поддержка как бинарных (Ki, Mi, Gi, Ti, Pi), так и десятичных (K, M, G, T, P) единиц
+    if (unit == "KIB" || unit == "KI" || unit == "K") {
         return static_cast<qint64>(size * 1024);
-    } else if (unit == "M") {
+    } else if (unit == "MIB" || unit == "MI" || unit == "M") {
         return static_cast<qint64>(size * 1024 * 1024);
-    } else if (unit == "G") {
+    } else if (unit == "GIB" || unit == "GI" || unit == "G") {
         return static_cast<qint64>(size * 1024 * 1024 * 1024);
-    } else if (unit == "T") {
-        return static_cast<qint64>(size * 1024 * 1024 * 1024 * 1024);
+    } else if (unit == "TIB" || unit == "TI" || unit == "T") {
+        return static_cast<qint64>(size * 1024LL * 1024LL * 1024LL * 1024LL);
+    } else if (unit == "PIB" || unit == "PI" || unit == "P") {
+        return static_cast<qint64>(size * 1024LL * 1024LL * 1024LL * 1024LL * 1024LL);
     }
 
     return static_cast<qint64>(size);

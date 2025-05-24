@@ -40,8 +40,8 @@ void PartitionTableDialog::setupUi()
     mainLayout->addWidget(m_tableTypeCombo);
 
     // Пояснения к разным типам таблиц
-    QLabel *explanationLabel = new QLabel(tr("<b>MSDOS (MBR):</b> Standard partition table for most PCs. Limited to 2TB disks and 4 primary partitions.<br/>"
-                                          "<b>GPT:</b> Modern partition table with no practical limitations. Required for UEFI booting and disks larger than 2TB."));
+    QLabel *explanationLabel = new QLabel(tr("<b>MSDOS (MBR):</b> Standard partition table for most PCs. Limited to 2 TiB disks and 4 primary partitions.<br/>"
+                                          "<b>GPT:</b> Modern partition table with no practical limitations. Required for UEFI booting and disks larger than 2 TiB."));
     explanationLabel->setWordWrap(true);
     mainLayout->addWidget(explanationLabel);
 
