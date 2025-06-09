@@ -42,6 +42,14 @@ MainWindow::MainWindow(QWidget *parent) :
                     ui->statusBar->showMessage(tr("Failed to delete partition"), 3000);
                 }
             });
+    connect(m_diskManager, &DiskManager::partitionFormatted,
+            this, [this](bool success) {
+                if (success) {
+                    ui->statusBar->showMessage(tr("Partition formatted successfully"), 3000);
+                } else {
+                    ui->statusBar->showMessage(tr("Failed to format partition"), 3000);
+                }
+            });
 
     // Подключаем сигналы интерфейса
     connect(ui->btnRefreshDevices, &QPushButton::clicked,
@@ -56,6 +64,10 @@ MainWindow::MainWindow(QWidget *parent) :
             this, &MainWindow::onCreatePartitionClicked);
     connect(ui->actionDeletePartition, &QAction::triggered,
             this, &MainWindow::onDeletePartitionClicked);
+    connect(ui->actionFormatPartition, &QAction::triggered,
+            this, &MainWindow::onFormatPartitionClicked);
+    connect(ui->actionMountPartition, &QAction::triggered,
+            this, &MainWindow::onMountClicked);
 
     // Подключаем кнопки управления RAID
     connect(ui->btnMarkFaulty, &QPushButton::clicked,
@@ -79,6 +91,12 @@ MainWindow::MainWindow(QWidget *parent) :
 MainWindow::~MainWindow()
 {
     delete ui;
+}
+
+void MainWindow::onMountClicked()
+{
+   FlyDirDialog *dialog = new FlyDirDialog(this, "text", "/");
+   dialog->exec();
 }
 
 void MainWindow::onRefreshDevices()
@@ -325,6 +343,72 @@ void MainWindow::onDeletePartitionClicked()
     dialog->deleteLater();
 }
 
+void MainWindow::onFormatPartitionClicked()
+{
+    // Получаем выбранный элемент
+    QTreeWidgetItem *item = ui->treeDevices->currentItem();
+    if (!item) {
+        QMessageBox::warning(this, tr("No Partition Selected"),
+                            tr("Please select a partition to format."));
+        return;
+    }
+
+    // Проверяем, является ли выбранное устройство разделом
+    if (!isSelectedItemPartition()) {
+        QMessageBox::warning(this, tr("Invalid Selection"),
+                            tr("Please select a partition, not a disk or RAID array."));
+        return;
+    }
+
+    QString partitionPath = getSelectedPartitionPath();
+    if (partitionPath.isEmpty()) {
+        QMessageBox::warning(this, tr("Invalid Partition"),
+                            tr("Cannot determine partition path."));
+        return;
+    }
+
+    // Проверяем, не смонтирован ли раздел
+    QString mountPoint = item->text(5); // Колонка Mount Point
+    if (!mountPoint.isEmpty()) {
+        QMessageBox::warning(this, tr("Partition is Mounted"),
+                            tr("Cannot format partition %1 because it is currently mounted at %2.\n\n"
+                               "Please unmount the partition first.")
+                               .arg(partitionPath)
+                               .arg(mountPoint));
+        return;
+    }
+
+    // Создаем и показываем диалог форматирования
+    FormatPartitionDialog *dialog = new FormatPartitionDialog(partitionPath, this);
+    if (dialog->exec() == QDialog::Accepted && dialog->isConfirmed()) {
+        // Получаем параметры форматирования
+        QString filesystem = dialog->getSelectedFilesystem();
+        QString label = dialog->getVolumeLabel();
+
+        // Запрашиваем финальное подтверждение
+        QMessageBox::StandardButton reply;
+        QString message = tr("Format partition %1 with %2 filesystem?")
+                         .arg(partitionPath)
+                         .arg(filesystem.toUpper());
+
+        if (!label.isEmpty()) {
+            message += tr("\nVolume label: %1").arg(label);
+        }
+
+        message += tr("\n\nThis will permanently erase all data on the partition!");
+
+        reply = QMessageBox::question(this, tr("Confirm Format"),
+                                     message,
+                                     QMessageBox::Yes | QMessageBox::No);
+
+        if (reply == QMessageBox::Yes) {
+            // Форматируем раздел
+            m_diskManager->formatPartition(partitionPath, filesystem, label);
+        }
+    }
+    dialog->deleteLater();
+}
+
 bool MainWindow::isSelectedItemPartition() const
 {
     QTreeWidgetItem *item = ui->treeDevices->currentItem();
@@ -533,6 +617,7 @@ void MainWindow::updateButtonState()
 
     // Обновляем доступность действий в меню
     ui->actionDeletePartition->setEnabled(false);
+    ui->actionFormatPartition->setEnabled(false);
     ui->actionCreatePartition->setEnabled(false);
     ui->actionCreatePartitionTable->setEnabled(false);
 
@@ -561,6 +646,7 @@ void MainWindow::updateButtonState()
     if (isPartition) {
         QString mountPoint = item->text(5); // Колонка Mount Point
         ui->actionDeletePartition->setEnabled(mountPoint.isEmpty());
+        ui->actionFormatPartition->setEnabled(mountPoint.isEmpty());
     }
 
     // Кнопка "Пометить как неисправное" доступна только для устройств в RAID

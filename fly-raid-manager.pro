@@ -4,7 +4,7 @@ TARGET = fly-raid-manager
 QT       += core gui
 QT += widgets
 
-LIBS += -lflyintegration -lflyqtconfig -lflycore -lflyuiaux -lflyuiextra -lflypty -lflysu
+LIBS += -lflyintegration -lflyqtconfig -lflycore -lflyuiaux -lflyuiextra -lflypty -lflysu -lflyfiledialog
 INCLUDEPATH += /usr/include/fly
 
 SOURCES += \
@@ -13,6 +13,7 @@ SOURCES += \
     deletepartitiondialog.cpp \
     diskmanager.cpp \
     diskstructures.cpp \
+    formatpartitiondialog.cpp \
     main.cpp \
     mainwindow.cpp \
     partitiontabledialog.cpp
@@ -23,6 +24,7 @@ HEADERS += \
     deletepartitiondialog.h \
     diskmanager.h \
     diskstructures.h \
+    formatpartitiondialog.h \
     mainwindow.h \
     partitiontabledialog.h
 

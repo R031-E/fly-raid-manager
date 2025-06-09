@@ -175,6 +175,17 @@ void DiskManager::handleCommandFinished(int exitCode, QProcess::ExitStatus exitS
         refreshDevices();
         break;
 
+    case CommandType::FORMAT_PARTITION:
+        // После форматирования раздела обновляем список устройств
+        emit partitionFormatted(exitCode == 0 && exitStatus == QProcess::NormalExit);
+        if (exitCode == 0 && exitStatus == QProcess::NormalExit) {
+            emit commandOutput(tr("Partition formatted successfully"));
+        } else {
+            emit commandOutput(tr("Failed to format partition"));
+        }
+        refreshDevices();
+        break;
+
     case CommandType::GET_FREE_SPACE_ON_DEVICE:
         break;
 
@@ -265,6 +276,79 @@ void DiskManager::deletePartition(const QString &partitionPath)
     if (!m_commandExecutor->executeAsAdmin("parted", args)) {
         qWarning() << "Failed to run parted command for deleting partition";
         emit partitionDeleted(false);
+    }
+}
+
+void DiskManager::formatPartition(const QString &partitionPath, const QString &filesystemType, const QString &label)
+{
+    // Получаем команду форматирования для указанной файловой системы
+    QString formatCommand = getFormatCommand(filesystemType);
+    if (formatCommand.isEmpty()) {
+        qWarning() << "Unsupported filesystem type:" << filesystemType;
+        emit partitionFormatted(false);
+        return;
+    }
+
+    // Создаем аргументы для команды форматирования
+    QStringList args;
+
+    // Добавляем общие опции в зависимости от типа ФС
+    if (filesystemType.startsWith("ext")) {
+        // Для ext2/3/4: принудительное форматирование, быстрое создание
+        args << "-F"; // принудительно
+        if (!label.isEmpty()) {
+            args << "-L" << label; // метка тома
+        }
+    } else if (filesystemType == "xfs") {
+        // Для XFS: принудительное форматирование
+        args << "-f"; // принудительно
+        if (!label.isEmpty()) {
+            args << "-L" << label; // метка тома
+        }
+    } else if (filesystemType == "btrfs") {
+        // Для Btrfs: принудительное форматирование
+        args << "-f"; // принудительно
+        if (!label.isEmpty()) {
+            args << "-L" << label; // метка тома
+        }
+    } else if (filesystemType == "fat32") {
+        // Для FAT32
+        args << "-F" << "32"; // FAT32
+        if (!label.isEmpty()) {
+            args << "-n" << label; // метка тома
+        }
+    } else if (filesystemType == "fat16") {
+        // Для FAT16
+        args << "-F" << "16"; // FAT16
+        if (!label.isEmpty()) {
+            args << "-n" << label; // метка тома
+        }
+    } else if (filesystemType == "ntfs") {
+        // Для NTFS: быстрое форматирование
+        args << "-f"; // быстрое форматирование
+        if (!label.isEmpty()) {
+            args << "-L" << label; // метка тома
+        }
+    } else if (filesystemType == "linux-swap") {
+        // Для swap: только метка если указана
+        if (!label.isEmpty()) {
+            args << "-L" << label; // метка swap
+        }
+    }
+
+    // Добавляем путь к устройству
+    args << partitionPath;
+
+    // Устанавливаем тип команды
+    m_currentCommand = CommandType::FORMAT_PARTITION;
+
+    qDebug() << "Formatting partition:" << partitionPath << "as" << filesystemType
+             << "using command:" << formatCommand << "with args:" << args;
+
+    // Запускаем команду форматирования с правами администратора
+    if (!m_commandExecutor->executeAsAdmin(formatCommand, args)) {
+        qWarning() << "Failed to run format command:" << formatCommand;
+        emit partitionFormatted(false);
     }
 }
 
@@ -508,4 +592,28 @@ qint64 DiskManager::sizeStringToBytes(const QString &sizeStr)
     }
 
     return static_cast<qint64>(size);
+}
+
+QString DiskManager::getFormatCommand(const QString &filesystemType) const
+{
+    // Возвращаем команду форматирования для указанного типа файловой системы
+    if (filesystemType == "ext4") {
+        return "mkfs.ext4";
+    } else if (filesystemType == "ext3") {
+        return "mkfs.ext3";
+    } else if (filesystemType == "ext2") {
+        return "mkfs.ext2";
+    } else if (filesystemType == "xfs") {
+        return "mkfs.xfs";
+    } else if (filesystemType == "btrfs") {
+        return "mkfs.btrfs";
+    } else if (filesystemType == "fat32" || filesystemType == "fat16") {
+        return "mkfs.fat";
+    } else if (filesystemType == "ntfs") {
+        return "mkfs.ntfs";
+    } else if (filesystemType == "linux-swap") {
+        return "mkswap";
+    }
+
+    return QString(); // Неподдерживаемый тип ФС
 }

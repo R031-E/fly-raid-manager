@@ -17,7 +17,9 @@ public:
                         const QString &filesystemType, const QString &startSize,
                         const QString &endSize);
     void deletePartition(const QString &partitionPath);
+    void formatPartition(const QString &partitionPath, const QString &filesystemType, const QString &label);
     void getFreeSpaceOnDeviceInfo(const QString &devicePath);
+    QString getFormatCommand(const QString &filesystemType) const;
     DiskStructure getDiskStructure() const { return m_diskStructure; }
 
 signals:
@@ -44,7 +46,8 @@ private:
         CREATE_PARTITION_TABLE,
         CREATE_PARTITION,
         DELETE_PARTITION,
-        GET_FREE_SPACE_ON_DEVICE
+        GET_FREE_SPACE_ON_DEVICE,
+        FORMAT_PARTITION
     };
 
     CommandType m_currentCommand = CommandType::NONE;

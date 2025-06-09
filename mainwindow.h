@@ -3,10 +3,12 @@
 
 #include <QMainWindow>
 #include <QTreeWidgetItem>
+#include "flydirdialog.h"
 #include "diskmanager.h"
 #include "partitiontabledialog.h"
 #include "createpartitiondialog.h"
 #include "deletepartitiondialog.h"
+#include "formatpartitiondialog.h"
 
 namespace Ui {
 class MainWindow;
@@ -42,6 +44,10 @@ private slots:
     void onCreatePartitionTableClicked();
     void onCreatePartitionClicked();
     void onDeletePartitionClicked();
+    void onFormatPartitionClicked();
+
+    //Слоты для монтирования и размонтирования
+    void onMountClicked();
 
 private:
     Ui::MainWindow *ui;

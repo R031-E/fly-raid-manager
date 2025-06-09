@@ -254,22 +254,8 @@
         <item>
          <widget class="QTabWidget" name="tabDetails">
           <property name="currentIndex">
-           <number>1</number>
+           <number>0</number>
           </property>
-          <widget class="QWidget" name="tabInfo">
-           <attribute name="title">
-            <string>Information</string>
-           </attribute>
-           <layout class="QVBoxLayout" name="verticalLayout_2">
-            <item>
-             <widget class="QTextEdit" name="txtDeviceDetails">
-              <property name="readOnly">
-               <bool>true</bool>
-              </property>
-             </widget>
-            </item>
-           </layout>
-          </widget>
           <widget class="QWidget" name="tabLog">
            <attribute name="title">
             <string>Operations log</string>
@@ -530,13 +516,13 @@
    </property>
   </action>
   <action name="actionCreatePartitionTable">
-    <property name="icon">
-     <iconset theme="edit-table">
-      <normaloff>.</normaloff>.</iconset>
-    </property>
-    <property name="text">
-     <string>Create Partition Table</string>
-    </property>
+   <property name="icon">
+    <iconset theme="edit-table">
+     <normaloff>.</normaloff>.</iconset>
+   </property>
+   <property name="text">
+    <string>Create Partition Table</string>
+   </property>
   </action>
   <action name="actionFormatPartition">
    <property name="icon">
