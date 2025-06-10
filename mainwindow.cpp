@@ -50,6 +50,10 @@ MainWindow::MainWindow(QWidget *parent) :
                     ui->statusBar->showMessage(tr("Failed to format partition"), 3000);
                 }
             });
+    connect(m_diskManager, &DiskManager::deviceMounted,
+                this, &MainWindow::onDeviceMounted);
+    connect(m_diskManager, &DiskManager::deviceUnmounted,
+                this, &MainWindow::onDeviceUnmounted);
 
     // Подключаем сигналы интерфейса
     connect(ui->btnRefreshDevices, &QPushButton::clicked,
@@ -67,7 +71,11 @@ MainWindow::MainWindow(QWidget *parent) :
     connect(ui->actionFormatPartition, &QAction::triggered,
             this, &MainWindow::onFormatPartitionClicked);
     connect(ui->actionMountPartition, &QAction::triggered,
-            this, &MainWindow::onMountClicked);
+            this, &MainWindow::onMountPartitionClicked);
+    connect(ui->actionUnmountPartition, &QAction::triggered,
+            this, &MainWindow::onUnmountPartitionClicked);
+    connect(ui->actionCreateRaid, &QAction::triggered,
+            this, &MainWindow::onCreateRaidClicked);
 
     // Подключаем кнопки управления RAID
     connect(ui->btnMarkFaulty, &QPushButton::clicked,
@@ -82,7 +90,7 @@ MainWindow::MainWindow(QWidget *parent) :
             this, &MainWindow::updateButtonState);
 
     // Настраиваем интерфейс
-    updateInterface();
+    setupInitialInterface();
 
     // Обновляем список устройств при запуске
     onRefreshDevices();
@@ -93,10 +101,267 @@ MainWindow::~MainWindow()
     delete ui;
 }
 
-void MainWindow::onMountClicked()
+void MainWindow::setupInitialInterface()
 {
-   FlyDirDialog *dialog = new FlyDirDialog(this, "text", "/");
-   dialog->exec();
+    ui->treeDevices->setHeaderLabels(QStringList()
+                                    << tr("Device") << tr("Size") << tr("Filesystem")
+                                    << tr("Used") << tr("Free") << tr("Mount Point")
+                                    << tr("Flags") << tr("Status"));
+    updateButtonState();
+}
+
+void MainWindow::onCreateRaidClicked()
+{
+    // Проверяем, есть ли доступные устройства для RAID
+    DiskStructure diskStructure = m_diskManager->getDiskStructure();
+
+    // Подсчитываем доступные устройства
+    int availableDevices = 0;
+
+    // Считаем разделы, которые не смонтированы и не в RAID
+    for (const DiskInfo &disk : diskStructure.getDisks()) {
+        for (const PartitionInfo &partition : disk.partitions) {
+            if (partition.mountPoint.isEmpty() && !partition.isRaidMember) {
+                availableDevices++;
+            }
+        }
+    }
+
+    // Считаем неразмеченные диски
+    for (const DiskInfo &disk : diskStructure.getDisks()) {
+        if (disk.partitions.isEmpty()) {
+            // Проверяем, не используется ли диск в RAID
+            bool isInRaid = false;
+            for (const RaidInfo &raid : diskStructure.getRaids()) {
+                for (const RaidMemberInfo &member : raid.members) {
+                    if (member.devicePath == disk.devicePath) {
+                        isInRaid = true;
+                        break;
+                    }
+                }
+                if (isInRaid) break;
+            }
+
+            if (!isInRaid) {
+                availableDevices++;
+            }
+        }
+    }
+
+    if (availableDevices < 2) {
+        QMessageBox::warning(this, tr("Insufficient Devices"),
+                            tr("At least 2 unmounted devices or partitions are required to create a RAID array.\n\n"
+                               "Available devices: %1\n"
+                               "Required: 2 or more").arg(availableDevices));
+        return;
+    }
+
+    // Создаем и показываем диалог создания RAID
+    CreateRaidArrayDialog *dialog = new CreateRaidArrayDialog(diskStructure, this);
+
+    // Подключаем сигналы диалога к DiskManager
+    connect(dialog, &CreateRaidArrayDialog::createRaidRequested,
+            m_diskManager, &DiskManager::createRaidArray);
+
+    // Подключаем сигналы DiskManager к диалогу
+    connect(m_diskManager, &DiskManager::deviceWipeCompleted,
+            dialog, &CreateRaidArrayDialog::onWipeProgressUpdate);
+    connect(m_diskManager, &DiskManager::raidCreationProgress,
+            dialog, &CreateRaidArrayDialog::onRaidCreationProgress);
+    connect(m_diskManager, &DiskManager::raidCreationCompleted,
+            dialog, &CreateRaidArrayDialog::onRaidCreationCompleted);
+
+    // Показываем диалог
+    if (dialog->exec() == QDialog::Accepted) {
+        ui->statusBar->showMessage(tr("RAID array creation completed"), 5000);
+
+        // Обновляем отображение устройств
+        onRefreshDevices();
+    }
+
+    dialog->deleteLater();
+}
+
+void MainWindow::onMountPartitionClicked()
+{
+    // Получаем выбранный элемент
+    QTreeWidgetItem *item = ui->treeDevices->currentItem();
+    if (!item) {
+        QMessageBox::warning(this, tr("No Device Selected"),
+                            tr("Please select a partition or RAID array to mount."));
+        return;
+    }
+
+    // Проверяем, можно ли монтировать выбранное устройство
+    if (!isSelectedItemMountable()) {
+        QMessageBox::warning(this, tr("Invalid Selection"),
+                            tr("Please select a partition or RAID array, not a disk."));
+        return;
+    }
+
+    QString devicePath = getSelectedDevicePath();
+    if (devicePath.isEmpty()) {
+        QMessageBox::warning(this, tr("Invalid Device"),
+                            tr("Cannot determine device path."));
+        return;
+    }
+
+    // Проверяем, не смонтировано ли уже устройство
+    if (m_diskManager->isDeviceMounted(devicePath)) {
+        QMessageBox::information(this, tr("Already Mounted"),
+                                tr("Device %1 is already mounted at %2.")
+                                   .arg(devicePath)
+                                   .arg(m_diskManager->getMountPoint(devicePath)));
+        return;
+    }
+
+    // Проверяем наличие файловой системы
+    QString filesystem = m_diskManager->getDeviceFilesystem(devicePath);
+    if (filesystem.isEmpty() || filesystem == "unknown") {
+        QMessageBox::warning(this, tr("No Filesystem"),
+                            tr("Device %1 has no recognizable filesystem.\n\n"
+                               "Please format the device before mounting.")
+                               .arg(devicePath));
+        return;
+    }
+
+    // Создаем диалог выбора папки для монтирования
+    FlyDirDialog *dirDialog = new FlyDirDialog(this,
+                                              tr("Select Mount Point"),
+                                              "/mnt");
+
+    // Подключаем сигналы диалога
+    connect(dirDialog, &FlyDirDialog::accepted, [this, dirDialog, devicePath, filesystem]() {
+        QString mountPoint = dirDialog->directory();
+
+        if (mountPoint.isEmpty()) {
+            QMessageBox::warning(this, tr("No Mount Point"),
+                                tr("Please select a valid mount point."));
+            dirDialog->deleteLater();
+            return;
+        }
+
+        // Запрашиваем подтверждение
+        QMessageBox::StandardButton reply;
+        reply = QMessageBox::question(this, tr("Confirm Mount"),
+                                     tr("Mount device %1 (%2) at %3?")
+                                         .arg(devicePath)
+                                         .arg(filesystem.toUpper())
+                                         .arg(mountPoint),
+                                     QMessageBox::Yes | QMessageBox::No);
+
+        if (reply == QMessageBox::Yes) {
+            // Монтируем устройство
+            m_diskManager->mountDevice(devicePath, mountPoint);
+        }
+
+        dirDialog->deleteLater();
+    });
+
+    connect(dirDialog, &FlyDirDialog::rejected, [dirDialog]() {
+        dirDialog->deleteLater();
+    });
+
+    // Показываем диалог
+    dirDialog->exec();
+}
+
+void MainWindow::onUnmountPartitionClicked()
+{
+    // Получаем выбранный элемент
+    QTreeWidgetItem *item = ui->treeDevices->currentItem();
+    if (!item) {
+        QMessageBox::warning(this, tr("No Device Selected"),
+                            tr("Please select a partition or RAID array to unmount."));
+        return;
+    }
+
+    // Проверяем, можно ли размонтировать выбранное устройство
+    if (!isSelectedItemMountable()) {
+        QMessageBox::warning(this, tr("Invalid Selection"),
+                            tr("Please select a partition or RAID array, not a disk."));
+        return;
+    }
+
+    QString devicePath = getSelectedDevicePath();
+    if (devicePath.isEmpty()) {
+        QMessageBox::warning(this, tr("Invalid Device"),
+                            tr("Cannot determine device path."));
+        return;
+    }
+
+    // Проверяем, смонтировано ли устройство
+    if (!m_diskManager->isDeviceMounted(devicePath)) {
+        QMessageBox::information(this, tr("Not Mounted"),
+                                tr("Device %1 is not mounted.")
+                                   .arg(devicePath));
+        return;
+    }
+
+    QString mountPoint = m_diskManager->getMountPoint(devicePath);
+
+    // Запрашиваем подтверждение
+    QMessageBox::StandardButton reply;
+    reply = QMessageBox::question(this, tr("Confirm Unmount"),
+                                 tr("Unmount device %1 from %2?\n\n"
+                                    "Make sure all applications using this device are closed.")
+                                     .arg(devicePath)
+                                     .arg(mountPoint),
+                                 QMessageBox::Yes | QMessageBox::No);
+
+    if (reply == QMessageBox::Yes) {
+        // Размонтируем устройство
+        m_diskManager->unmountDevice(devicePath);
+    }
+}
+
+void MainWindow::onDeviceMounted(bool success, const QString &devicePath, const QString &mountPoint)
+{
+    if (success) {
+        ui->statusBar->showMessage(tr("Device %1 mounted successfully at %2")
+                                  .arg(devicePath)
+                                  .arg(mountPoint), 5000);
+    } else {
+        ui->statusBar->showMessage(tr("Failed to mount device %1")
+                                  .arg(devicePath), 5000);
+    }
+}
+
+void MainWindow::onDeviceUnmounted(bool success, const QString &devicePath)
+{
+    if (success) {
+        ui->statusBar->showMessage(tr("Device %1 unmounted successfully")
+                                  .arg(devicePath), 5000);
+    } else {
+        ui->statusBar->showMessage(tr("Failed to unmount device %1")
+                                  .arg(devicePath), 5000);
+    }
+}
+
+bool MainWindow::isSelectedItemRaid() const
+{
+    QTreeWidgetItem *item = ui->treeDevices->currentItem();
+    if (!item) {
+        return false;
+    }
+
+    QString devicePath = item->text(0);
+    return devicePath.contains("/dev/md") && item->parent() == nullptr;
+}
+
+bool MainWindow::isSelectedItemMountable() const
+{
+    return isSelectedItemPartition() || isSelectedItemRaid();
+}
+
+QString MainWindow::getSelectedDevicePath() const
+{
+    QTreeWidgetItem *item = ui->treeDevices->currentItem();
+    if (!item) {
+        return QString();
+    }
+
+    return item->text(0);
 }
 
 void MainWindow::onRefreshDevices()
@@ -354,7 +619,7 @@ void MainWindow::onFormatPartitionClicked()
     }
 
     // Проверяем, является ли выбранное устройство разделом
-    if (!isSelectedItemPartition()) {
+    if (!isSelectedItemPartition() && !isSelectedItemRaid()) {
         QMessageBox::warning(this, tr("Invalid Selection"),
                             tr("Please select a partition, not a disk or RAID array."));
         return;
@@ -434,26 +699,21 @@ QString MainWindow::getSelectedPartitionPath() const
 
 void MainWindow::updateInterface()
 {
-    // Получаем текущую структуру дисков
-    DiskStructure diskStructure = m_diskManager->getDiskStructure();
+    // ЗАМЕНИТЬ создание копии НА получение ссылки:
+    const DiskStructure& diskStructure = m_diskManager->getDiskStructure();
 
-    // Очищаем таблицу
     ui->treeDevices->clear();
 
-    // В зависимости от режима отображения заполняем таблицу
     if (m_showAllDevices) {
-        // Показываем все устройства
-        populateAllDevicesView();
+        populateAllDevicesView(diskStructure);  // ПЕРЕДАТЬ ссылку
     } else {
-        // Показываем только RAID
-        populateRaidView();
+        populateRaidView(diskStructure);        // ПЕРЕДАТЬ ссылку
     }
 
-    // Обновляем доступность кнопок
     updateButtonState();
 }
 
-void MainWindow::populateAllDevicesView()
+void MainWindow::populateAllDevicesView(const DiskStructure& diskStructure)
 {
     // Заголовки колонок для режима "Все устройства"
     ui->treeDevices->setHeaderLabels(QStringList()
@@ -467,7 +727,7 @@ void MainWindow::populateAllDevicesView()
                                     << tr("Status"));
 
     // Получаем список дисков
-    for (const DiskInfo &disk : m_diskManager->getDiskStructure().getDisks()) {
+    for (const DiskInfo &disk : diskStructure.getDisks()) {
         // Добавляем диск в таблицу
         QTreeWidgetItem *diskItem = addDiskToTree(disk);
 
@@ -478,7 +738,7 @@ void MainWindow::populateAllDevicesView()
     }
 
     // Получаем список RAID-массивов
-    for (const RaidInfo &raid : m_diskManager->getDiskStructure().getRaids()) {
+    for (const RaidInfo &raid : diskStructure.getRaids()) {
         // Добавляем RAID в таблицу
         addRaidToTree(raid);
     }
@@ -487,7 +747,7 @@ void MainWindow::populateAllDevicesView()
     ui->treeDevices->expandToDepth(0);
 }
 
-void MainWindow::populateRaidView()
+void MainWindow::populateRaidView(const DiskStructure& diskStructure)
 {
     // Заголовки колонок для режима "Только RAID"
     ui->treeDevices->setHeaderLabels(QStringList()
@@ -501,7 +761,7 @@ void MainWindow::populateRaidView()
                                     << tr("State"));
 
     // Получаем список RAID-массивов
-    for (const RaidInfo &raid : m_diskManager->getDiskStructure().getRaids()) {
+    for (const RaidInfo &raid : diskStructure.getRaids()) {
         // Добавляем RAID в таблицу
         QTreeWidgetItem *raidItem = addRaidToTree(raid);
 
@@ -620,8 +880,10 @@ void MainWindow::updateButtonState()
     ui->actionFormatPartition->setEnabled(false);
     ui->actionCreatePartition->setEnabled(false);
     ui->actionCreatePartitionTable->setEnabled(false);
+    ui->actionMountPartition->setEnabled(false);
+    ui->actionUnmountPartition->setEnabled(false);
 
-    if (!item) {
+    if (!item || !m_diskManager) {
         return;
     }
 
@@ -633,8 +895,9 @@ void MainWindow::updateButtonState()
                    devicePath.contains("/dev/vd") || devicePath.contains("/dev/hd")) &&
                   item->parent() == nullptr;
     bool isPartition = isSelectedItemPartition();
-    bool isRaid = devicePath.contains("md");
+    bool isRaid = isSelectedItemRaid();
     bool isRaidMember = item->parent() && item->parent()->text(0).contains("md");
+    bool isMountable = isSelectedItemMountable();
 
     // Активируем действия для дисков
     if (isDisk) {
@@ -642,11 +905,40 @@ void MainWindow::updateButtonState()
         ui->actionCreatePartitionTable->setEnabled(true);
     }
 
-    // Активируем действие удаления для разделов (не смонтированных)
-    if (isPartition) {
+    // Активируем действия для разделов (только в режиме "Все устройства")
+    if (isPartition && m_showAllDevices) {
         QString mountPoint = item->text(5); // Колонка Mount Point
-        ui->actionDeletePartition->setEnabled(mountPoint.isEmpty());
-        ui->actionFormatPartition->setEnabled(mountPoint.isEmpty());
+        bool isMounted = !mountPoint.isEmpty();
+
+        // В режиме RAID удаление разделов недоступно
+        ui->actionDeletePartition->setEnabled(!isMounted);
+        ui->actionFormatPartition->setEnabled(!isMounted);
+    }
+
+    // Форматирование доступно для RAID массивов (но не их членов)
+    if (isRaid && !isRaidMember) {
+        ui->actionFormatPartition->setEnabled(true);
+    }
+
+    // Активируем действия монтирования/размонтирования
+    if (isMountable) {
+        bool isMounted = m_diskManager->isDeviceMounted(devicePath);
+        QString filesystem = m_diskManager->getDeviceFilesystem(devicePath);
+        bool hasFilesystem = !filesystem.isEmpty() && filesystem != "unknown";
+
+        // Монтирование доступно для немонтированных устройств с файловой системой
+        // Включая RAID массивы в режиме RAID
+        if (m_showAllDevices) {
+            // В режиме "Все устройства" - для разделов и RAID
+            ui->actionMountPartition->setEnabled(!isMounted && hasFilesystem);
+            ui->actionUnmountPartition->setEnabled(isMounted);
+        } else {
+            // В режиме "Только RAID" - только для RAID массивов (не их членов)
+            if (isRaid && !isRaidMember) {
+                ui->actionMountPartition->setEnabled(!isMounted && hasFilesystem);
+                ui->actionUnmountPartition->setEnabled(isMounted);
+            }
+        }
     }
 
     // Кнопка "Пометить как неисправное" доступна только для устройств в RAID

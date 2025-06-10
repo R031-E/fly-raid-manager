@@ -3,12 +3,13 @@
 
 #include <QMainWindow>
 #include <QTreeWidgetItem>
-#include "flydirdialog.h"
 #include "diskmanager.h"
 #include "partitiontabledialog.h"
 #include "createpartitiondialog.h"
 #include "deletepartitiondialog.h"
 #include "formatpartitiondialog.h"
+#include "createraidarraydialog.h"
+#include "flydirdialog.h"
 
 namespace Ui {
 class MainWindow;
@@ -46,8 +47,16 @@ private slots:
     void onDeletePartitionClicked();
     void onFormatPartitionClicked();
 
-    //Слоты для монтирования и размонтирования
-    void onMountClicked();
+    // Новые слоты для монтирования/размонтирования
+    void onMountPartitionClicked();
+    void onUnmountPartitionClicked();
+
+    // Слоты для обработки результатов монтирования/размонтирования
+    void onDeviceMounted(bool success, const QString &devicePath, const QString &mountPoint);
+    void onDeviceUnmounted(bool success, const QString &devicePath);
+
+    //Слоты для RAID
+    void onCreateRaidClicked();
 
 private:
     Ui::MainWindow *ui;
@@ -57,11 +66,11 @@ private:
     // Обновление интерфейса в соответствии с текущим режимом
     void updateInterface();
 
-    // Заполнение таблицы всеми устройствами
-    void populateAllDevicesView();
+    void setupInitialInterface();
 
-    // Заполнение таблицы только RAID-устройствами
-    void populateRaidView();
+    // ОБНОВИТЬ сигнатуры существующих методов:
+    void populateAllDevicesView(const DiskStructure& diskStructure);
+    void populateRaidView(const DiskStructure& diskStructure);
 
     // Добавление диска в таблицу
     QTreeWidgetItem* addDiskToTree(const DiskInfo &disk);
@@ -78,10 +87,13 @@ private:
     // Обновление доступности кнопок в зависимости от выбранного элемента
     void updateButtonState();
 
-    // Проверка, является ли выбранный элемент разделом
+    // Проверка, является ли выбранный элемент разделом или RAID-массивом
     bool isSelectedItemPartition() const;
+    bool isSelectedItemRaid() const;
+    bool isSelectedItemMountable() const;
 
-    // Получение пути к выбранному разделу
+    // Получение пути к выбранному устройству
+    QString getSelectedDevicePath() const;
     QString getSelectedPartitionPath() const;
 };
 

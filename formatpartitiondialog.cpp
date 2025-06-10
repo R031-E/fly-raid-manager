@@ -201,7 +201,7 @@ QString FormatPartitionDialog::getSelectedFilesystem() const
 
 QString FormatPartitionDialog::getVolumeLabel() const
 {
-    return m_volumeLabelEdit->text().trimmed();
+    return "";
 }
 
 bool FormatPartitionDialog::isConfirmed() const

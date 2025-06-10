@@ -40,6 +40,441 @@ void DiskManager::refreshDevices()
     }
 }
 
+void DiskManager::createRaidArray(RaidType raidType, const QStringList &devices, const QString &arrayName)
+{
+    if (devices.size() < 2) {
+        emit commandOutput(tr("Error: At least 2 devices required for RAID creation"));
+        emit raidCreationCompleted(false, QString());
+        return;
+    }
+
+    // Сохраняем параметры для создания RAID
+    m_raidType = raidType;
+    m_raidArrayName = arrayName;
+    m_devicesToWipe = devices;
+    m_wipedDevices.clear();
+    m_createdRaidDevice.clear();
+
+    emit raidCreationStarted();
+    emit commandOutput(tr("Starting RAID %1 creation with %2 devices")
+                      .arg(static_cast<int>(raidType))
+                      .arg(devices.size()));
+
+    // Начинаем с очистки первого устройства
+    processNextWipeOperation();
+}
+
+void DiskManager::wipeDevice(const QString &devicePath)
+{
+    m_currentWipeDevice = devicePath;
+
+    // Формируем команду wipefs
+    QStringList args;
+    args << "--all" << "--force" << devicePath;
+
+    // Устанавливаем тип команды
+    m_currentCommand = CommandType::WIPE_DEVICE;
+
+    emit commandOutput(tr("Wiping device %1...").arg(devicePath));
+    emit raidCreationProgress(tr("Preparing device %1").arg(devicePath));
+
+    // Запускаем wipefs с правами администратора
+    if (!m_commandExecutor->executeAsAdmin("wipefs", args)) {
+        qWarning() << "Failed to run wipefs command for" << devicePath;
+        emit deviceWipeCompleted(devicePath, false);
+    }
+}
+
+void DiskManager::processNextWipeOperation()
+{
+    if (m_devicesToWipe.isEmpty()) {
+        // Все устройства очищены, начинаем создание RAID
+        executeRaidCreation();
+        return;
+    }
+
+    // Берем следующее устройство для очистки
+    QString deviceToWipe = m_devicesToWipe.takeFirst();
+    wipeDevice(deviceToWipe);
+}
+
+void DiskManager::executeRaidCreation()
+{
+    if (m_wipedDevices.size() < 2) {
+        emit commandOutput(tr("Error: Not enough devices prepared for RAID creation"));
+        emit raidCreationCompleted(false, QString());
+        return;
+    }
+
+    // Генерируем имя RAID устройства
+    m_createdRaidDevice = generateRaidDeviceName();
+
+    // Формируем команду mdadm
+    QStringList args;
+    args << "--create" << m_createdRaidDevice;
+    args << "--level=" + raidTypeToMdadmLevel(m_raidType);
+    args << "--raid-devices=" + QString::number(m_wipedDevices.size());
+
+    // Добавляем имя массива если указано
+    if (!m_raidArrayName.isEmpty()) {
+        args << "--name=" + m_raidArrayName;
+    }
+
+    // Для RAID 0 и 1 устанавливаем metadata версию для совместимости
+    args << "--metadata=1.2";
+
+    // Добавляем устройства
+    args.append(m_wipedDevices);
+
+    // Устанавливаем тип команды
+    m_currentCommand = CommandType::CREATE_RAID_ARRAY;
+
+    emit commandOutput(tr("Creating RAID array %1...").arg(m_createdRaidDevice));
+    emit raidCreationProgress(tr("Running mdadm to create RAID array"));
+
+    // Запускаем mdadm с правами администратора
+    if (!m_commandExecutor->executeAsAdmin("mdadm", args)) {
+        qWarning() << "Failed to run mdadm command";
+        emit raidCreationCompleted(false, QString());
+    }
+}
+
+QString DiskManager::generateRaidDeviceName() const
+{
+    // Ищем свободное имя для RAID устройства
+    for (int i = 0; i < 128; ++i) {
+        QString candidateName = QString("/dev/md%1").arg(i);
+
+        // Проверяем, не существует ли уже такое устройство
+        bool exists = false;
+        for (const RaidInfo &raid : m_diskStructure.getRaids()) {
+            if (raid.devicePath == candidateName) {
+                exists = true;
+                break;
+            }
+        }
+
+        if (!exists) {
+            return candidateName;
+        }
+    }
+
+    // Если все заняты, используем /dev/md127 (максимальный номер)
+    return "/dev/md127";
+}
+
+QString DiskManager::raidTypeToMdadmLevel(RaidType type) const
+{
+    switch (type) {
+    case RaidType::RAID0: return "0";
+    case RaidType::RAID1: return "1";
+    case RaidType::RAID5: return "5";
+    default: return "1";
+    }
+}
+
+void DiskManager::mountDevice(const QString &devicePath, const QString &mountPoint, const QString &options)
+{
+    QString errorMessage;
+
+    // Валидация операции монтирования
+    if (!validateMountOperation(devicePath, mountPoint, errorMessage)) {
+        emit commandOutput(tr("Mount validation failed: %1").arg(errorMessage));
+        emit deviceMounted(false, devicePath, mountPoint);
+        return;
+    }
+
+    // Создаем точку монтирования если она не существует
+    /*if (!createMountPoint(mountPoint)) {
+        emit commandOutput(tr("Failed to create mount point: %1").arg(mountPoint));
+        emit deviceMounted(false, devicePath, mountPoint);
+        return;
+    }*/
+
+    // Сохраняем данные для обработки результата
+    m_currentMountDevice = devicePath;
+    m_currentMountPoint = mountPoint;
+
+    // Формируем команду mount
+    QStringList args;
+    if (!options.isEmpty()) {
+        args << "-o" << options;
+    }
+    args << devicePath << mountPoint;
+
+    // Устанавливаем тип команды
+    m_currentCommand = CommandType::MOUNT_DEVICE;
+
+    // Запускаем mount с правами администратора
+    if (!m_commandExecutor->executeAsAdmin("mount", args)) {
+        qWarning() << "Failed to run mount command";
+        emit deviceMounted(false, devicePath, mountPoint);
+    }
+}
+
+void DiskManager::unmountDevice(const QString &devicePath)
+{
+    QString errorMessage;
+
+    // Валидация операции размонтирования
+    if (!validateUnmountOperation(devicePath, errorMessage)) {
+        emit commandOutput(tr("Unmount validation failed: %1").arg(errorMessage));
+        emit deviceUnmounted(false, devicePath);
+        return;
+    }
+
+    // Получаем текущую точку монтирования для удаления из fstab
+    QString currentMountPoint = getMountPoint(devicePath);
+    m_currentMountDevice = devicePath;
+    m_currentMountPoint = currentMountPoint;
+
+    // Формируем команду umount
+    QStringList args;
+    args << devicePath;
+
+    // Устанавливаем тип команды
+    m_currentCommand = CommandType::UNMOUNT_DEVICE;
+
+    // Запускаем umount с правами администратора
+    if (!m_commandExecutor->executeAsAdmin("umount", args)) {
+        qWarning() << "Failed to run umount command";
+        emit deviceUnmounted(false, devicePath);
+    }
+}
+
+bool DiskManager::isDeviceMounted(const QString &devicePath) const
+{
+    // Проверяем в нашей структуре данных
+    for (const DiskInfo &disk : m_diskStructure.getDisks()) {
+        for (const PartitionInfo &partition : disk.partitions) {
+            if (partition.devicePath == devicePath) {
+                return !partition.mountPoint.isEmpty();
+            }
+        }
+    }
+
+    for (const RaidInfo &raid : m_diskStructure.getRaids()) {
+        if (raid.devicePath == devicePath) {
+            return !raid.mountPoint.isEmpty();
+        }
+    }
+
+    return false;
+}
+
+QString DiskManager::getMountPoint(const QString &devicePath) const
+{
+    // Получаем точку монтирования из нашей структуры данных
+    for (const DiskInfo &disk : m_diskStructure.getDisks()) {
+        for (const PartitionInfo &partition : disk.partitions) {
+            if (partition.devicePath == devicePath) {
+                return partition.mountPoint;
+            }
+        }
+    }
+
+    for (const RaidInfo &raid : m_diskStructure.getRaids()) {
+        if (raid.devicePath == devicePath) {
+            return raid.mountPoint;
+        }
+    }
+
+    return QString();
+}
+
+bool DiskManager::validateMountOperation(const QString &devicePath, const QString &mountPoint, QString &errorMessage)
+{
+    // Проверяем, что устройство не примонтировано
+    if (isDeviceMounted(devicePath)) {
+        errorMessage = tr("Device %1 is already mounted").arg(devicePath);
+        return false;
+    }
+
+    // Проверяем наличие файловой системы
+    QString filesystem = getDeviceFilesystem(devicePath);
+    if (filesystem.isEmpty() || filesystem == "unknown") {
+        errorMessage = tr("Device %1 has no recognizable filesystem").arg(devicePath);
+        return false;
+    }
+
+    // Проверяем, что точка монтирования не пустая
+    if (mountPoint.isEmpty()) {
+        errorMessage = tr("Mount point cannot be empty");
+        return false;
+    }
+
+    // Проверяем, что точка монтирования не используется
+    QDir mountDir(mountPoint);
+    if (mountDir.exists()) {
+        QFileInfoList entries = mountDir.entryInfoList(QDir::NoDotAndDotDot | QDir::AllEntries);
+        if (!entries.isEmpty()) {
+            errorMessage = tr("Mount point %1 is not empty").arg(mountPoint);
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool DiskManager::validateUnmountOperation(const QString &devicePath, QString &errorMessage)
+{
+    // Проверяем, что устройство примонтировано
+    if (!isDeviceMounted(devicePath)) {
+        errorMessage = tr("Device %1 is not mounted").arg(devicePath);
+        return false;
+    }
+
+    return true;
+}
+
+bool DiskManager::addToFstab(const QString &devicePath, const QString &mountPoint, const QString &filesystem, const QString &options)
+{
+    // Получаем UUID устройства для более надежного монтирования
+    //ПЕРЕПИСАТЬ
+    QString uuid;
+    QProcess blkidProcess;
+    blkidProcess.start("sudo blkid", QStringList() << "-s" << "UUID" << "-o" << "value" << devicePath);
+    if (blkidProcess.waitForFinished(100000)) {
+        uuid = QString::fromUtf8(blkidProcess.readAllStandardOutput()).trimmed();
+        qDebug() << uuid;
+    }
+
+    // Формируем запись для fstab
+    QString fstabEntry;
+    if (!uuid.isEmpty()) {
+        fstabEntry = QString("UUID=%1 %2 %3 %4 0 2\n")
+                     .arg(uuid)
+                     .arg(mountPoint)
+                     .arg(filesystem)
+                     .arg(options.isEmpty() ? "defaults" : options);
+    } else {
+        fstabEntry = QString("%1 %2 %3 %4 0 2\n")
+                     .arg(devicePath)
+                     .arg(mountPoint)
+                     .arg(filesystem)
+                     .arg(options.isEmpty() ? "defaults" : options);
+    }
+
+    // Добавляем запись в /etc/fstab
+    QStringList args;
+    args << "-c" << QString("echo '%1' >> /etc/fstab").arg(fstabEntry.trimmed());
+
+    QProcess addToFstabProcess;
+    addToFstabProcess.start("sudo", QStringList() << "sh" << args);
+    if (!addToFstabProcess.waitForFinished(5000)) {
+        qWarning() << "Failed to add entry to fstab";
+        return false;
+    }
+
+    if (addToFstabProcess.exitCode() != 0) {
+        qWarning() << "Failed to add entry to fstab:" << addToFstabProcess.readAllStandardError();
+        return false;
+    }
+
+    return true;
+}
+
+bool DiskManager::removeFromFstab(const QString &devicePath)
+{
+    // Получаем UUID устройства
+    QString uuid;
+    QProcess blkidProcess;
+    blkidProcess.start("blkid", QStringList() << "-s" << "UUID" << "-o" << "value" << devicePath);
+    if (blkidProcess.waitForFinished(5000)) {
+        uuid = QString::fromUtf8(blkidProcess.readAllStandardOutput()).trimmed();
+    }
+
+    // Формируем команду для удаления строки из fstab
+    QString sedPattern;
+    if (!uuid.isEmpty()) {
+        sedPattern = QString("UUID=%1").arg(uuid);
+    } else {
+        // Экранируем слэши в пути устройства для sed
+        QString escapedPath = devicePath;
+        escapedPath.replace("/", "\\/");
+        sedPattern = escapedPath;
+    }
+
+    QStringList args;
+    args << "-c" << QString("sed -i '/%1/d' /etc/fstab").arg(sedPattern);
+
+    QProcess removeFromFstabProcess;
+    removeFromFstabProcess.start("sudo", QStringList() << "sh" << args);
+    if (!removeFromFstabProcess.waitForFinished(5000)) {
+        qWarning() << "Failed to remove entry from fstab";
+        return false;
+    }
+
+    if (removeFromFstabProcess.exitCode() != 0) {
+        qWarning() << "Failed to remove entry from fstab:" << removeFromFstabProcess.readAllStandardError();
+        return false;
+    }
+
+    return true;
+}
+
+QString DiskManager::getDeviceFilesystem(const QString &devicePath) const
+{
+    // Ищем в нашей структуре данных
+    for (const DiskInfo &disk : m_diskStructure.getDisks()) {
+        for (const PartitionInfo &partition : disk.partitions) {
+            if (partition.devicePath == devicePath) {
+                return partition.filesystem;
+            }
+        }
+    }
+
+    for (const RaidInfo &raid : m_diskStructure.getRaids()) {
+        if (raid.devicePath == devicePath) {
+            return raid.filesystem;
+        }
+    }
+
+    return QString();
+}
+
+bool DiskManager::createMountPoint(const QString &mountPoint)
+{
+    QDir dir;
+    if (dir.exists(mountPoint)) {
+        return true; // Уже существует
+    }
+
+    // Создаем каталог с правами администратора
+    QProcess mkdirProcess;
+    mkdirProcess.start("sudo", QStringList() << "mkdir" << "-p" << mountPoint);
+    if (!mkdirProcess.waitForFinished(5000)) {
+        qWarning() << "Failed to create mount point:" << mountPoint;
+        return false;
+    }
+
+    return mkdirProcess.exitCode() == 0;
+}
+
+bool DiskManager::removeMountPointIfEmpty(const QString &mountPoint)
+{
+    QDir mountDir(mountPoint);
+    if (!mountDir.exists()) {
+        return true; // Уже не существует
+    }
+
+    // Проверяем, что каталог пустой
+    QFileInfoList entries = mountDir.entryInfoList(QDir::NoDotAndDotDot | QDir::AllEntries);
+    if (!entries.isEmpty()) {
+        return true; // Не удаляем непустой каталог
+    }
+
+    // Удаляем пустой каталог
+    QProcess rmdirProcess;
+    rmdirProcess.start("sudo", QStringList() << "rmdir" << mountPoint);
+    if (!rmdirProcess.waitForFinished(5000)) {
+        qWarning() << "Failed to remove mount point:" << mountPoint;
+        return false;
+    }
+
+    return rmdirProcess.exitCode() == 0;
+}
+
 void DiskManager::handleCommandOutput(const QString &output)
 {
     // Передаем вывод для отображения
@@ -187,6 +622,77 @@ void DiskManager::handleCommandFinished(int exitCode, QProcess::ExitStatus exitS
         break;
 
     case CommandType::GET_FREE_SPACE_ON_DEVICE:
+        break;
+
+    case CommandType::MOUNT_DEVICE:
+        // После монтирования добавляем запись в fstab и обновляем список устройств
+        if (exitCode == 0 && exitStatus == QProcess::NormalExit) {
+            QString filesystem = getDeviceFilesystem(m_currentMountDevice);
+            if (addToFstab(m_currentMountDevice, m_currentMountPoint, filesystem, "defaults")) {
+                emit commandOutput(tr("Device %1 mounted successfully at %2 and added to fstab")
+                                  .arg(m_currentMountDevice).arg(m_currentMountPoint));
+                emit deviceMounted(true, m_currentMountDevice, m_currentMountPoint);
+            } else {
+                emit commandOutput(tr("Device %1 mounted at %2, but failed to add to fstab")
+                                  .arg(m_currentMountDevice).arg(m_currentMountPoint));
+                emit deviceMounted(true, m_currentMountDevice, m_currentMountPoint);
+            }
+        } else {
+            emit commandOutput(tr("Failed to mount device %1").arg(m_currentMountDevice));
+            emit deviceMounted(false, m_currentMountDevice, m_currentMountPoint);
+        }
+        refreshDevices();
+        break;
+
+    case CommandType::UNMOUNT_DEVICE:
+        // После размонтирования удаляем запись из fstab и обновляем список устройств
+        if (exitCode == 0 && exitStatus == QProcess::NormalExit) {
+            if (removeFromFstab(m_currentMountDevice)) {
+                emit commandOutput(tr("Device %1 unmounted successfully and removed from fstab")
+                                  .arg(m_currentMountDevice));
+            } else {
+                emit commandOutput(tr("Device %1 unmounted, but failed to remove from fstab")
+                                  .arg(m_currentMountDevice));
+            }
+            //removeMountPointIfEmpty(m_currentMountPoint);
+            emit deviceUnmounted(true, m_currentMountDevice);
+        } else {
+            emit commandOutput(tr("Failed to unmount device %1").arg(m_currentMountDevice));
+            emit deviceUnmounted(false, m_currentMountDevice);
+        }
+        refreshDevices();
+        break;
+    case CommandType::WIPE_DEVICE:
+        // После wipefs переходим к следующему устройству или созданию RAID
+        if (exitCode == 0 && exitStatus == QProcess::NormalExit) {
+            emit commandOutput(tr("Device %1 wiped successfully").arg(m_currentWipeDevice));
+            emit deviceWipeCompleted(m_currentWipeDevice, true);
+            m_wipedDevices.append(m_currentWipeDevice);
+        } else {
+            emit commandOutput(tr("Failed to wipe device %1").arg(m_currentWipeDevice));
+            emit deviceWipeCompleted(m_currentWipeDevice, false);
+
+            // Прерываем создание RAID при ошибке очистки
+            emit raidCreationCompleted(false, QString());
+            return;
+        }
+
+        // Обрабатываем следующее устройство
+        processNextWipeOperation();
+        break;
+
+    case CommandType::CREATE_RAID_ARRAY:
+        // После создания RAID обновляем список устройств
+        if (exitCode == 0 && exitStatus == QProcess::NormalExit) {
+            emit commandOutput(tr("RAID array %1 created successfully").arg(m_createdRaidDevice));
+            emit raidCreationCompleted(true, m_createdRaidDevice);
+        } else {
+            emit commandOutput(tr("Failed to create RAID array"));
+            emit raidCreationCompleted(false, QString());
+        }
+
+        // Обновляем список устройств в любом случае
+        refreshDevices();
         break;
 
     default:
@@ -390,7 +896,7 @@ void DiskManager::parseLsblkOutput(const QString &output)
         QString name = deviceObj["name"].toString();
         QString type = deviceObj["type"].toString();
 
-        // Обрабатываем только диски
+        // Обрабатываем обычные диски
         if (type == "disk") {
             DiskInfo disk;
             disk.devicePath = "/dev/" + name;
@@ -405,155 +911,260 @@ void DiskManager::parseLsblkOutput(const QString &output)
                 // Обрабатываем разделы
                 for (const QJsonValue &partValue : children) {
                     QJsonObject partObj = partValue.toObject();
-
-                    QString partName = partObj["name"].toString();
-                    QString partType = partObj["type"].toString();
-
-                    if (partType == "part") {
-                        PartitionInfo partition;
-                        partition.devicePath = "/dev/" + partName;
-                        partition.size = partObj["size"].toString();
-                        partition.filesystem = partObj["fstype"].toString();
-                        partition.mountPoint = partObj["mountpoint"].toString();
-
-                        // Добавляем раздел к диску
-                        disk.partitions.append(partition);
-                    }
+                    parsePartitionFromJson(partObj, disk);
                 }
             }
 
             // Добавляем диск в структуру
             m_diskStructure.addDisk(disk);
         }
+        // Обрабатываем RAID устройства (md)
+        else if (type == "raid0" || type == "raid1" || type == "raid5" || type == "raid10") {
+            RaidInfo raid;
+            raid.devicePath = "/dev/" + name;
+            raid.size = deviceObj["size"].toString();
+            raid.filesystem = deviceObj["fstype"].toString();
+            raid.mountPoint = deviceObj["mountpoint"].toString();
+            raid.state = tr("active"); // По умолчанию считаем активным
+
+            // Определяем тип RAID по типу устройства
+            if (type == "raid0") {
+                raid.type = RaidType::RAID0;
+            } else if (type == "raid1") {
+                raid.type = RaidType::RAID1;
+            } else if (type == "raid5") {
+                raid.type = RaidType::RAID5;
+            } else {
+                raid.type = RaidType::UNKNOWN;
+            }
+
+            // Добавляем RAID в структуру (члены будут добавлены в parseMdadmDetailOutput)
+            m_diskStructure.addRaid(raid);
+        }
+    }
+}
+
+// Добавить новый вспомогательный метод для парсинга разделов
+void DiskManager::parsePartitionFromJson(const QJsonObject &partObj, DiskInfo &disk)
+{
+    QString partName = partObj["name"].toString();
+    QString partType = partObj["type"].toString();
+
+    if (partType == "part") {
+        PartitionInfo partition;
+        partition.devicePath = "/dev/" + partName;
+        partition.size = partObj["size"].toString();
+        partition.filesystem = partObj["fstype"].toString();
+        partition.mountPoint = partObj["mountpoint"].toString();
+
+        // Проверяем, является ли раздел членом RAID
+        // Это будет определено позже в parseMdadmDetailOutput
+        partition.isRaidMember = false;
+
+        // Добавляем раздел к диску
+        disk.partitions.append(partition);
     }
 }
 
 void DiskManager::parseMdadmScanOutput(const QString &output)
 {
-    // Парсим вывод mdadm --detail --scan
-    QStringList lines = output.split('\n', Qt::SkipEmptyParts);
-    qDebug() << "mdadm scan: " << lines;
-    for (const QString &line : lines) {
-        if (line.startsWith("ARRAY")) {
-            // Найден RAID-массив
-            RaidInfo raid;
+    if (output.trimmed().isEmpty()) {
+        // Нет RAID массивов - это нормально
+        return;
+    }
 
-            // Парсим строку с информацией о RAID
-            QRegularExpression rxDevice("/dev/md\\d+");
-            QRegularExpressionMatch match = rxDevice.match(line);
-            if (match.hasMatch()) {
-                raid.devicePath = match.captured(0);
-                // Добавляем этот RAID в список для получения детальной информации
+    QStringList lines = output.split('\n', Qt::SkipEmptyParts);
+
+    for (const QString &line : lines) {
+        if (!line.startsWith("ARRAY")) {
+            continue;
+        }
+
+        RaidInfo raid;
+        bool foundDevice = false;
+        bool foundLevel = false;
+
+        // Парсим строку с информацией о RAID
+        QRegularExpression rxDevice("(/dev/md\\d+)");
+        QRegularExpressionMatch deviceMatch = rxDevice.match(line);
+        if (deviceMatch.hasMatch()) {
+            raid.devicePath = deviceMatch.captured(1);
+            foundDevice = true;
+
+            // Добавляем в список для детального анализа
+            if (!m_raidDetailsToCheck.contains(raid.devicePath)) {
                 m_raidDetailsToCheck.append(raid.devicePath);
             }
+        }
 
-            QRegularExpression rxLevel("level=([\\w\\d]+)");
-            match = rxLevel.match(line);
-            if (match.hasMatch()) {
-                QString levelStr = match.captured(1);
-                if (levelStr == "raid0" || levelStr == "0") {
-                    raid.type = RaidType::RAID0;
-                } else if (levelStr == "raid1" || levelStr == "1") {
-                    raid.type = RaidType::RAID1;
-                } else if (levelStr == "raid5" || levelStr == "5") {
-                    raid.type = RaidType::RAID5;
+        // Парсим уровень RAID
+        QRegularExpression rxLevel("level=([\\w\\d]+)");
+        QRegularExpressionMatch levelMatch = rxLevel.match(line);
+        if (levelMatch.hasMatch()) {
+            QString levelStr = levelMatch.captured(1).toLower();
+            if (levelStr == "raid0" || levelStr == "0") {
+                raid.type = RaidType::RAID0;
+            } else if (levelStr == "raid1" || levelStr == "1") {
+                raid.type = RaidType::RAID1;
+            } else if (levelStr == "raid5" || levelStr == "5") {
+                raid.type = RaidType::RAID5;
+            } else {
+                raid.type = RaidType::UNKNOWN;
+            }
+            foundLevel = true;
+        }
+
+        // Добавляем RAID в структуру, если найдены основные параметры
+        if (foundDevice) {
+            // Устанавливаем значения по умолчанию
+            if (!foundLevel) {
+                raid.type = RaidType::UNKNOWN;
+            }
+            raid.state = tr("unknown");
+            raid.syncPercent = 100;
+
+            // Проверяем, не добавлен ли уже этот RAID
+            bool alreadyExists = false;
+            for (const RaidInfo &existingRaid : m_diskStructure.getRaids()) {
+                if (existingRaid.devicePath == raid.devicePath) {
+                    alreadyExists = true;
+                    break;
                 }
             }
 
-            // По умолчанию считаем активным
-            raid.state = tr("active");
-
-            // Добавляем RAID в структуру
-            m_diskStructure.addRaid(raid);
+            if (!alreadyExists) {
+                m_diskStructure.addRaid(raid);
+            }
         }
     }
 }
 
 void DiskManager::parseMdadmDetailOutput(const QString &output)
 {
-    // Парсим вывод mdadm --detail /dev/mdX
     QStringList lines = output.split('\n', Qt::SkipEmptyParts);
+    if (lines.isEmpty()) {
+        return;
+    }
 
     QString currentRaidPath;
-    int i = 0;
 
-    // Найдем путь к RAID-массиву
-    for (; i < lines.size(); i++) {
-        if (lines[i].contains("/dev/md")) {
-            QRegularExpression rxDevice("/dev/md\\d+");
-            QRegularExpressionMatch match = rxDevice.match(lines[i]);
-            if (match.hasMatch()) {
-                currentRaidPath = match.captured(0);
-                break;
-            }
+    // Находим путь к RAID устройству в первых строках
+    for (int i = 0; i < qMin(5, lines.size()); ++i) {
+        QRegularExpression rxDevice("(/dev/md\\d+)");
+        QRegularExpressionMatch match = rxDevice.match(lines[i]);
+        if (match.hasMatch()) {
+            currentRaidPath = match.captured(1);
+            break;
         }
     }
 
     if (currentRaidPath.isEmpty()) {
+        qWarning() << "Could not find RAID device path in mdadm output";
         return;
     }
 
-    // Найдем RAID в нашей структуре
-    for (int j = 0; j < m_diskStructure.getRaids().size(); j++) {
-        RaidInfo &raid = m_diskStructure.getRaids()[j];
-        if (raid.devicePath == currentRaidPath) {
-            // Обновим информацию о RAID
+    // Находим RAID в нашей структуре данных
+    QVector<RaidInfo> &raids = m_diskStructure.getRaids();
+    RaidInfo *targetRaid = nullptr;
 
-            // Ищем состояние
-            for (; i < lines.size(); i++) {
-                if (lines[i].contains("State :")) {
-                    raid.state = lines[i].split(':').last().trimmed();
-                    break;
-                }
-            }
-
-            // Ищем размер
-            for (; i < lines.size(); i++) {
-                if (lines[i].contains("Array Size :")) {
-                    raid.size = lines[i].split(':').last().trimmed();
-                    break;
-                }
-            }
-
-            // Ищем устройства
-            for (; i < lines.size(); i++) {
-                if (lines[i].contains("Number   Major   Minor   RaidDevice State")) {
-                    i++; // Переходим к первому устройству
-                    break;
-                }
-            }
-
-            // Парсим устройства
-            for (; i < lines.size(); i++) {
-                QString line = lines[i].trimmed();
-                if (line.isEmpty() || !line[0].isDigit()) {
-                    break;
-                }
-
-                QStringList parts = line.split(QRegularExpression("\\s+"));
-                if (parts.size() >= 6) {
-                    RaidMemberInfo member;
-                    member.devicePath = "/dev/" + parts[5]; // Имя устройства обычно в 6-й колонке
-
-                    // Определим статус
-                    QString status = parts.last();
-                    if (status.contains("active")) {
-                        member.status = DeviceStatus::NORMAL;
-                    } else if (status.contains("faulty")) {
-                        member.status = DeviceStatus::FAULTY;
-                    } else if (status.contains("spare")) {
-                        member.status = DeviceStatus::SPARE;
-                    } else if (status.contains("rebuilding")) {
-                        member.status = DeviceStatus::REBUILDING;
-                    } else if (status.contains("sync")) {
-                        member.status = DeviceStatus::SYNCING;
-                    }
-
-                    raid.members.append(member);
-                }
-            }
-
+    for (int i = 0; i < raids.size(); ++i) {
+        if (raids[i].devicePath == currentRaidPath) {
+            targetRaid = &raids[i];
             break;
+        }
+    }
+
+    if (!targetRaid) {
+        qWarning() << "RAID device not found in structure:" << currentRaidPath;
+        return;
+    }
+
+    // Очищаем список членов перед заполнением
+    targetRaid->members.clear();
+
+    // Парсим информацию о RAID
+    bool inDeviceSection = false;
+
+    for (const QString &line : lines) {
+        QString trimmedLine = line.trimmed();
+
+        // Ищем состояние RAID
+        if (trimmedLine.contains("State :")) {
+            QStringList parts = trimmedLine.split(':', Qt::SkipEmptyParts);
+            if (parts.size() >= 2) {
+                targetRaid->state = parts[1].trimmed();
+            }
+        }
+        // Ищем размер массива
+        else if (trimmedLine.contains("Array Size :")) {
+            QStringList parts = trimmedLine.split(':', Qt::SkipEmptyParts);
+            if (parts.size() >= 2) {
+                QString sizeInfo = parts[1].trimmed();
+                // Извлекаем только число и единицу измерения
+                QRegularExpression sizeRegex("(\\d+(?:\\.\\d+)?\\s*\\w+)");
+                QRegularExpressionMatch sizeMatch = sizeRegex.match(sizeInfo);
+                if (sizeMatch.hasMatch()) {
+                    targetRaid->size = sizeMatch.captured(1);
+                }
+            }
+        }
+        // Ищем заголовок таблицы устройств
+        else if (trimmedLine.contains("Number") && trimmedLine.contains("Major") &&
+                 trimmedLine.contains("Minor") && trimmedLine.contains("RaidDevice")) {
+            inDeviceSection = true;
+            continue;
+        }
+        // Если мы в секции устройств, парсим их
+        else if (inDeviceSection) {
+            // Пустая строка означает конец секции устройств
+            if (trimmedLine.isEmpty()) {
+                break;
+            }
+
+            // Парсим строку с устройством
+            QStringList parts = trimmedLine.split(QRegularExpression("\\s+"), Qt::SkipEmptyParts);
+            if (parts.size() >= 6) {
+                // Формат: Number Major Minor RaidDevice State DeviceName
+                QString deviceName = parts.last(); // Имя устройства в последней колонке
+                QString devicePath = "/dev/" + deviceName;
+
+                // Определяем статус устройства из предпоследней колонки или из состояния
+                QString statusStr = parts.size() > 6 ? parts[parts.size() - 2] : parts[4];
+
+                DeviceStatus status = DeviceStatus::NORMAL;
+                if (statusStr.contains("active", Qt::CaseInsensitive)) {
+                    status = DeviceStatus::NORMAL;
+                } else if (statusStr.contains("faulty", Qt::CaseInsensitive)) {
+                    status = DeviceStatus::FAULTY;
+                } else if (statusStr.contains("spare", Qt::CaseInsensitive)) {
+                    status = DeviceStatus::SPARE;
+                } else if (statusStr.contains("rebuilding", Qt::CaseInsensitive)) {
+                    status = DeviceStatus::REBUILDING;
+                } else if (statusStr.contains("sync", Qt::CaseInsensitive)) {
+                    status = DeviceStatus::SYNCING;
+                }
+
+                RaidMemberInfo member(devicePath, status);
+                targetRaid->members.append(member);
+
+                // Отмечаем соответствующий раздел как член RAID
+                markPartitionAsRaidMember(devicePath);
+            }
+        }
+    }
+}
+
+// Добавить новый вспомогательный метод
+void DiskManager::markPartitionAsRaidMember(const QString &devicePath)
+{
+    // Проходим по всем дискам и их разделам
+    QVector<DiskInfo> &disks = m_diskStructure.getDisks();
+    for (DiskInfo &disk : disks) {
+        for (PartitionInfo &partition : disk.partitions) {
+            if (partition.devicePath == devicePath) {
+                partition.isRaidMember = true;
+                return;
+            }
         }
     }
 }

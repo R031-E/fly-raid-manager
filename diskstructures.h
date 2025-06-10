@@ -70,10 +70,11 @@ struct DiskInfo {
 class DiskStructure {
 public:
     // Получение всех дисков в системе
-    QVector<DiskInfo> getDisks() const { return disks; }
+    QVector<DiskInfo>& getDisks() { return disks; }
+    QVector<RaidInfo>& getRaids() { return raids; }
 
-    // Получение всех RAID-массивов в системе
-    QVector<RaidInfo> getRaids() const { return raids; }
+    const QVector<DiskInfo>& getDisks() const { return disks; }
+    const QVector<RaidInfo>& getRaids() const { return raids; }
 
     // Добавление диска
     void addDisk(const DiskInfo &disk) { disks.append(disk); }

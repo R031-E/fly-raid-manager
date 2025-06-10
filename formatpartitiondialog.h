@@ -35,7 +35,7 @@ private:
 
     // Элементы интерфейса
     QComboBox *m_filesystemCombo;
-    QLineEdit *m_volumeLabelEdit;
+    //QLineEdit *m_volumeLabelEdit;
     QCheckBox *m_confirmCheckBox;
     QLabel *m_warningLabel;
     QTextEdit *m_descriptionText;

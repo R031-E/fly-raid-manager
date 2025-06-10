@@ -10,6 +10,7 @@ INCLUDEPATH += /usr/include/fly
 SOURCES += \
     commandexecutor.cpp \
     createpartitiondialog.cpp \
+    createraidarraydialog.cpp \
     deletepartitiondialog.cpp \
     diskmanager.cpp \
     diskstructures.cpp \
@@ -21,6 +22,7 @@ SOURCES += \
 HEADERS += \
     commandexecutor.h \
     createpartitiondialog.h \
+    createraidarraydialog.h \
     deletepartitiondialog.h \
     diskmanager.h \
     diskstructures.h \
@@ -29,6 +31,7 @@ HEADERS += \
     partitiontabledialog.h
 
 FORMS += \
+    createraidarraydialog.ui \
     mainwindow.ui
 
 TRANSLATIONS += \
