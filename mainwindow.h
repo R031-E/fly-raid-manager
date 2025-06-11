@@ -9,6 +9,7 @@
 #include "deletepartitiondialog.h"
 #include "formatpartitiondialog.h"
 #include "createraidarraydialog.h"
+#include "deleteraiddialog.h"
 #include "flydirdialog.h"
 
 namespace Ui {
@@ -57,6 +58,7 @@ private slots:
 
     //Слоты для RAID
     void onCreateRaidClicked();
+    void onDeleteRaidClicked();
 
 private:
     Ui::MainWindow *ui;
@@ -91,6 +93,7 @@ private:
     bool isSelectedItemPartition() const;
     bool isSelectedItemRaid() const;
     bool isSelectedItemMountable() const;
+    bool isSelectedItemRaidMember() const;
 
     // Получение пути к выбранному устройству
     QString getSelectedDevicePath() const;

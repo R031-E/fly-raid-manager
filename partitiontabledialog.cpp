@@ -31,12 +31,12 @@ void PartitionTableDialog::setupUi()
     m_tableTypeCombo = new QComboBox();
     m_tableTypeCombo->addItem(tr("MSDOS (MBR)"), "msdos");
     m_tableTypeCombo->addItem(tr("GPT"), "gpt");
-    m_tableTypeCombo->addItem(tr("AMOEBA"), "amoeba");
+    /*m_tableTypeCombo->addItem(tr("AMOEBA"), "amoeba");
     m_tableTypeCombo->addItem(tr("BSD"), "bsd");
     m_tableTypeCombo->addItem(tr("DVH"), "dvh");
     m_tableTypeCombo->addItem(tr("PC98"), "pc98");
     m_tableTypeCombo->addItem(tr("SUN"), "sun");
-    m_tableTypeCombo->addItem(tr("LOOP"), "loop");
+    m_tableTypeCombo->addItem(tr("LOOP"), "loop");*/
     mainLayout->addWidget(m_tableTypeCombo);
 
     // Пояснения к разным типам таблиц

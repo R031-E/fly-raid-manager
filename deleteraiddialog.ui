@@ -1,32 +1,31 @@
-<?xml version="1.0" encoding="UTF-8"?>
 <ui version="4.0">
- <class>CreateRaidArrayDialog</class>
- <widget class="QDialog" name="CreateRaidArrayDialog">
+ <class>DeleteRaidDialog</class>
+ <widget class="QDialog" name="DeleteRaidDialog">
   <property name="geometry">
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>700</width>
-    <height>600</height>
+    <width>600</width>
+    <height>500</height>
    </rect>
   </property>
   <property name="minimumSize">
    <size>
-    <width>700</width>
-    <height>600</height>
+    <width>600</width>
+    <height>500</height>
    </size>
   </property>
   <property name="maximumSize">
    <size>
-    <width>700</width>
-    <height>600</height>
+    <width>600</width>
+    <height>500</height>
    </size>
   </property>
   <property name="windowTitle">
-   <string>Create RAID Array</string>
+   <string>Delete RAID Array</string>
   </property>
   <property name="windowIcon">
-   <iconset theme="drive-harddisk-raid">
+   <iconset theme="dialog-warning">
     <normaloff>.</normaloff>.</iconset>
   </property>
   <property name="modal">
@@ -68,7 +67,7 @@
         <string/>
        </property>
        <property name="pixmap">
-        <pixmap>drive-harddisk-raid</pixmap>
+        <pixmap>dialog-warning</pixmap>
        </property>
        <property name="scaledContents">
         <bool>true</bool>
@@ -85,7 +84,7 @@
         </font>
        </property>
        <property name="text">
-        <string>Create RAID Array</string>
+        <string>Delete RAID Array</string>
        </property>
       </widget>
      </item>
@@ -105,109 +104,24 @@
     </layout>
    </item>
    <item>
-    <widget class="QGroupBox" name="raidSettingsGroup">
+    <widget class="QLabel" name="warningLabel">
      <property name="font">
       <font>
-       <pointsize>11</pointsize>
-       <weight>75</weight>
-       <bold>true</bold>
+       <pointsize>10</pointsize>
+       <weight>50</weight>
+       <bold>false</bold>
       </font>
      </property>
-     <property name="title">
-      <string>RAID Settings</string>
+     <property name="text">
+      <string>&lt;b&gt;Warning:&lt;/b&gt; This operation will permanently destroy all data on the RAID array and cannot be undone.</string>
      </property>
-     <layout class="QFormLayout" name="raidSettingsLayout">
-      <property name="horizontalSpacing">
-       <number>10</number>
-      </property>
-      <property name="verticalSpacing">
-       <number>10</number>
-      </property>
-      <item row="0" column="0">
-       <widget class="QLabel" name="raidLevelLabel">
-        <property name="font">
-         <font>
-          <pointsize>11</pointsize>
-          <weight>50</weight>
-          <bold>false</bold>
-         </font>
-        </property>
-        <property name="text">
-         <string>RAID Level:</string>
-        </property>
-       </widget>
-      </item>
-      <item row="0" column="1">
-       <widget class="QComboBox" name="raidLevelCombo">
-        <property name="minimumSize">
-         <size>
-          <width>200</width>
-          <height>30</height>
-         </size>
-        </property>
-        <property name="font">
-         <font>
-          <pointsize>11</pointsize>
-          <weight>50</weight>
-          <bold>false</bold>
-         </font>
-        </property>
-        <item>
-         <property name="text">
-          <string>RAID 0 (Stripe) - No redundancy</string>
-         </property>
-        </item>
-        <item>
-         <property name="text">
-          <string>RAID 1 (Mirror) - Full redundancy</string>
-         </property>
-        </item>
-        <item>
-         <property name="text">
-          <string>RAID 5 (Stripe with parity) - Single drive fault tolerance</string>
-         </property>
-        </item>
-       </widget>
-      </item>
-      <item row="1" column="0">
-       <widget class="QLabel" name="arrayNameLabel">
-        <property name="font">
-         <font>
-          <pointsize>11</pointsize>
-          <weight>50</weight>
-          <bold>false</bold>
-         </font>
-        </property>
-        <property name="text">
-         <string>Array Name:</string>
-        </property>
-       </widget>
-      </item>
-      <item row="1" column="1">
-       <widget class="QLineEdit" name="arrayNameEdit">
-        <property name="minimumSize">
-         <size>
-          <width>200</width>
-          <height>30</height>
-         </size>
-        </property>
-        <property name="font">
-         <font>
-          <pointsize>11</pointsize>
-          <weight>50</weight>
-          <bold>false</bold>
-         </font>
-        </property>
-        <property name="placeholderText">
-         <string>Enter array name (optional)</string>
-        </property>
-       </widget>
-      </item>
-     </layout>
+     <property name="wordWrap">
+      <bool>true</bool>
+     </property>
     </widget>
    </item>
    <item>
-    <widget class="QGroupBox" name="deviceSelectionGroup">
+    <widget class="QGroupBox" name="raidInfoGroup">
      <property name="font">
       <font>
        <pointsize>11</pointsize>
@@ -216,14 +130,14 @@
       </font>
      </property>
      <property name="title">
-      <string>Device Selection</string>
+      <string>RAID Array Information</string>
      </property>
-     <layout class="QVBoxLayout" name="deviceSelectionLayout">
+     <layout class="QVBoxLayout" name="raidInfoLayout">
       <property name="spacing">
        <number>10</number>
       </property>
       <item>
-       <widget class="QLabel" name="deviceSelectionInfo">
+       <widget class="QLabel" name="raidDeviceLabel">
         <property name="font">
          <font>
           <pointsize>11</pointsize>
@@ -232,21 +146,12 @@
          </font>
         </property>
         <property name="text">
-         <string>Select devices/partitions to include in the RAID array:</string>
-        </property>
-        <property name="wordWrap">
-         <bool>true</bool>
+         <string>RAID Device: /dev/mdX</string>
         </property>
        </widget>
       </item>
       <item>
-       <widget class="QTreeWidget" name="deviceTree">
-        <property name="minimumSize">
-         <size>
-          <width>0</width>
-          <height>200</height>
-         </size>
-        </property>
+       <widget class="QLabel" name="raidTypeLabel">
         <property name="font">
          <font>
           <pointsize>11</pointsize>
@@ -254,53 +159,67 @@
           <bold>false</bold>
          </font>
         </property>
-        <property name="alternatingRowColors">
-         <bool>true</bool>
+        <property name="text">
+         <string>RAID Type: RAID1</string>
         </property>
-        <property name="selectionMode">
-         <enum>QAbstractItemView::NoSelection</enum>
-        </property>
-        <property name="rootIsDecorated">
-         <bool>true</bool>
-        </property>
-        <property name="itemsExpandable">
-         <bool>true</bool>
-        </property>
-        <property name="animated">
-         <bool>true</bool>
-        </property>
-        <attribute name="headerVisible">
-         <bool>true</bool>
-        </attribute>
-        <column>
-         <property name="text">
-          <string>Device</string>
-         </property>
-        </column>
-        <column>
-         <property name="text">
-          <string>Size</string>
-         </property>
-        </column>
-        <column>
-         <property name="text">
-          <string>Type</string>
-         </property>
-        </column>
-        <column>
-         <property name="text">
-          <string>Filesystem</string>
-         </property>
-        </column>
-        <column>
-         <property name="text">
-          <string>Status</string>
-         </property>
-        </column>
        </widget>
       </item>
       <item>
-       <widget class="QLabel" name="selectedDevicesLabel">
+       <widget class="QLabel" name="raidSizeLabel">
+        <property name="font">
+         <font>
+          <pointsize>11</pointsize>
+          <weight>50</weight>
+          <bold>false</bold>
+         </font>
+        </property>
+        <property name="text">
+         <string>Size: 1TB</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QLabel" name="raidStateLabel">
+        <property name="font">
+         <font>
+          <pointsize>11</pointsize>
+          <weight>50</weight>
+          <bold>false</bold>
+         </font>
+        </property>
+        <property name="text">
+         <string>State: active</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QLabel" name="memberDevicesTitle">
+        <property name="font">
+         <font>
+          <pointsize>11</pointsize>
+          <weight>75</weight>
+          <bold>true</bold>
+         </font>
+        </property>
+        <property name="text">
+         <string>Member Devices:</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QListWidget" name="memberDevicesList">
+        <property name="minimumSize">
+         <size>
+          <width>0</width>
+          <height>80</height>
+         </size>
+        </property>
+        <property name="maximumSize">
+         <size>
+          <width>16777215</width>
+          <height>80</height>
+         </size>
+        </property>
         <property name="font">
          <font>
           <pointsize>10</pointsize>
@@ -308,11 +227,8 @@
           <bold>false</bold>
          </font>
         </property>
-        <property name="styleSheet">
-         <string>QLabel { color: #2980b9; }</string>
-        </property>
-        <property name="text">
-         <string>Selected devices: 0 (minimum required will be shown below)</string>
+        <property name="alternatingRowColors">
+         <bool>true</bool>
         </property>
        </widget>
       </item>
@@ -332,7 +248,7 @@
       <bool>false</bool>
      </property>
      <property name="title">
-      <string>Operation Progress</string>
+      <string>Deletion Progress</string>
      </property>
      <layout class="QVBoxLayout" name="progressLayout">
       <property name="spacing">
@@ -348,7 +264,7 @@
          </font>
         </property>
         <property name="text">
-         <string>Preparing devices...</string>
+         <string>Stopping RAID array...</string>
         </property>
        </widget>
       </item>
@@ -370,13 +286,13 @@
         <property name="minimumSize">
          <size>
           <width>0</width>
-          <height>80</height>
+          <height>100</height>
          </size>
         </property>
         <property name="maximumSize">
          <size>
           <width>16777215</width>
-          <height>80</height>
+          <height>100</height>
          </size>
         </property>
         <property name="font">
@@ -432,7 +348,7 @@
   <connection>
    <sender>buttonBox</sender>
    <signal>accepted()</signal>
-   <receiver>CreateRaidArrayDialog</receiver>
+   <receiver>DeleteRaidDialog</receiver>
    <slot>accept()</slot>
    <hints>
     <hint type="sourcelabel">
@@ -448,7 +364,7 @@
   <connection>
    <sender>buttonBox</sender>
    <signal>rejected()</signal>
-   <receiver>CreateRaidArrayDialog</receiver>
+   <receiver>DeleteRaidDialog</receiver>
    <slot>reject()</slot>
    <hints>
     <hint type="sourcelabel">

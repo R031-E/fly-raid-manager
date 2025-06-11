@@ -65,6 +65,8 @@ void CreateRaidArrayDialog::populateDeviceTree(const DiskStructure &diskStructur
         diskItem->setFlags(Qt::ItemIsEnabled);
         diskItem->setForeground(4, QBrush(QColor("#666666")));
 
+        bool hasSelectablePartitions = false;
+
         // Добавляем разделы как дочерние элементы
         for (const PartitionInfo &partition : disk.partitions) {
             QTreeWidgetItem *partitionItem = new QTreeWidgetItem(diskItem);
@@ -76,7 +78,13 @@ void CreateRaidArrayDialog::populateDeviceTree(const DiskStructure &diskStructur
 
             bool isMounted = !partition.mountPoint.isEmpty();
             bool isInRaid = partition.isRaidMember;
-            bool isSelectable = !isMounted && !isInRaid;
+            // ИЗМЕНЕНИЕ: Добавляем проверку на отсутствие файловой системы
+            bool hasFilesystem = !partition.filesystem.isEmpty() &&
+                               partition.filesystem != "unknown" &&
+                               partition.filesystem != tr("No filesystem");
+
+            // Для RAID доступны только немонтированные партиции без файловой системы, не входящие в другие RAID
+            bool isSelectable = !isMounted && !isInRaid && !hasFilesystem;
 
             QString status;
             if (isMounted) {
@@ -85,9 +93,13 @@ void CreateRaidArrayDialog::populateDeviceTree(const DiskStructure &diskStructur
             } else if (isInRaid) {
                 status = tr("In RAID");
                 partitionItem->setForeground(4, QBrush(QColor("#e74c3c"))); // Красный
+            } else if (hasFilesystem) {
+                status = tr("Has filesystem");
+                partitionItem->setForeground(4, QBrush(QColor("#f39c12"))); // Оранжевый
             } else {
                 status = tr("Available");
                 partitionItem->setForeground(4, QBrush(QColor("#27ae60"))); // Зеленый
+                hasSelectablePartitions = true;
             }
 
             partitionItem->setText(4, status);
@@ -106,6 +118,11 @@ void CreateRaidArrayDialog::populateDeviceTree(const DiskStructure &diskStructur
             candidate.isMounted = isMounted;
             candidate.isInRaid = isInRaid;
             m_availableDevices.append(candidate);
+        }
+
+        // Скрываем диски без доступных партиций
+        if (!hasSelectablePartitions && disk.partitions.size() > 0) {
+            diskItem->setHidden(true);
         }
     }
 
@@ -153,74 +170,6 @@ void CreateRaidArrayDialog::populateDeviceTree(const DiskStructure &diskStructur
 
     ui->deviceTree->expandAll();
 }
-
-/*void CreateRaidArrayDialog::addDeviceToTree(const QString &devicePath, const QString &size,
-                                           const QString &type, const QString &filesystem,
-                                           bool isMounted, bool isInRaid)
-{
-    QTreeWidgetItem *deviceItem = nullptr;
-
-    // Если это раздел, ищем родительский диск
-    if (type == "partition") {
-        QString diskPath = devicePath;
-        diskPath.remove(QRegularExpression("[0-9]+$")); // Убираем номер раздела
-
-        // Ищем элемент диска в дереве
-        for (int i = 0; i < ui->deviceTree->topLevelItemCount(); ++i) {
-            QTreeWidgetItem *diskItem = ui->deviceTree->topLevelItem(i);
-            if (diskItem->text(0) == diskPath) {
-                deviceItem = new QTreeWidgetItem(diskItem);
-                break;
-            }
-        }
-    } else {
-        // Это целый диск
-        deviceItem = new QTreeWidgetItem(ui->deviceTree);
-    }
-
-    if (!deviceItem) {
-        qWarning() << "Failed to create tree item for device:" << devicePath;
-        return;
-    }
-
-    // Заполняем информацию об устройстве
-    deviceItem->setText(0, devicePath);
-    deviceItem->setText(1, size);
-    deviceItem->setText(2, type == "partition" ? tr("Partition") : tr("Disk"));
-    deviceItem->setText(3, filesystem.isEmpty() ? tr("No filesystem") : filesystem);
-
-    // Определяем статус и доступность для выбора
-    QString status;
-    bool isSelectable = true;
-
-    if (isMounted) {
-        status = tr("Mounted");
-        isSelectable = false;
-    } else if (isInRaid) {
-        status = tr("In RAID");
-        isSelectable = false;
-    } else {
-        status = tr("Available");
-    }
-
-    deviceItem->setText(4, status);
-
-    // Устанавливаем иконку
-    if (type == "partition") {
-        deviceItem->setIcon(0, QIcon::fromTheme("drive-harddisk-partition"));
-    } else {
-        deviceItem->setIcon(0, QIcon::fromTheme("drive-harddisk"));
-    }
-
-    // Добавляем чекбокс если устройство доступно для выбора
-    if (isSelectable) {
-        deviceItem->setFlags(deviceItem->flags() | Qt::ItemIsUserCheckable);
-        deviceItem->setCheckState(0, Qt::Unchecked);
-    } else {
-        deviceItem->setFlags(deviceItem->flags() & ~Qt::ItemIsEnabled);
-        deviceItem->setForeground(4, QBrush(QColor("#999999")));
-    }
-}*/
 
 void CreateRaidArrayDialog::setupRaidLevelCombo()
 {

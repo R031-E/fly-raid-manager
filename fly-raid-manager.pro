@@ -12,6 +12,7 @@ SOURCES += \
     createpartitiondialog.cpp \
     createraidarraydialog.cpp \
     deletepartitiondialog.cpp \
+    deleteraiddialog.cpp \
     diskmanager.cpp \
     diskstructures.cpp \
     formatpartitiondialog.cpp \
@@ -24,6 +25,7 @@ HEADERS += \
     createpartitiondialog.h \
     createraidarraydialog.h \
     deletepartitiondialog.h \
+    deleteraiddialog.h \
     diskmanager.h \
     diskstructures.h \
     formatpartitiondialog.h \
@@ -32,6 +34,7 @@ HEADERS += \
 
 FORMS += \
     createraidarraydialog.ui \
+    deleteraiddialog.ui \
     mainwindow.ui
 
 TRANSLATIONS += \

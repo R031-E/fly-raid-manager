@@ -33,6 +33,7 @@ public:
     QString getDeviceFilesystem(const QString &devicePath) const;
 
     void createRaidArray(RaidType raidType, const QStringList &devices, const QString &arrayName = QString());
+    void deleteRaidArray(const QString &raidDevice, const QStringList &memberDevices);
     void wipeDevice(const QString &devicePath);
 
 signals:
@@ -51,6 +52,11 @@ signals:
     void deviceWipeCompleted(const QString &device, bool success);
     void raidCreationProgress(const QString &message);
     void raidCreationCompleted(bool success, const QString &raidDevice);
+
+    void raidStopProgress(const QString &message);
+    void raidStopCompleted(bool success, const QString &raidDevice);
+    void superblockCleanProgress(const QString &device, bool success);
+    void raidDeletionCompleted(bool success, const QString &raidDevice);
 
 private slots:
     void handleCommandFinished(int exitCode, QProcess::ExitStatus exitStatus);
@@ -72,12 +78,23 @@ private:
         MOUNT_DEVICE,
         UNMOUNT_DEVICE,
         WIPE_DEVICE,
-        CREATE_RAID_ARRAY
+        CREATE_RAID_ARRAY,
+        STOP_RAID_ARRAY,
+        CLEAN_SUPERBLOCK,
+        DELETE_RAID_ARRAY
+    };
+
+    enum class WipeContext {
+        RAID_CREATION,
+        RAID_DELETION
     };
 
     CommandType m_currentCommand = CommandType::NONE;
+    WipeContext m_currentWipeContext;
+    bool m_isDeletingRaid;
     int m_commandsCompleted = 0;
     QStringList m_raidDetailsToCheck; // Список путей к RAID-массивам для детального анализа
+    bool m_hasDevicePartitionsLine;
 
     // Переменные для операций монтирования
     QString m_currentMountDevice;
@@ -89,6 +106,11 @@ private:
     QString m_raidArrayName;
     QString m_currentWipeDevice;
     QString m_createdRaidDevice;
+
+    QStringList m_devicesToCleanSuperblock;
+    QStringList m_cleanedSuperblockDevices;
+    QString m_raidToDelete;
+    QString m_currentSuperblockDevice;
 
     void parseMdadmScanOutput(const QString &output);
     void parseMdadmDetailOutput(const QString &output);
@@ -105,12 +127,23 @@ private:
     bool addToFstab(const QString &devicePath, const QString &mountPoint, const QString &filesystem, const QString &options);
     bool removeFromFstab(const QString &devicePath);
     bool createMountPoint(const QString &mountPoint);
-    bool removeMountPointIfEmpty(const QString &mountPoint);
 
     void processNextWipeOperation();
+    void processAllWipeOperationsSync();
     void executeRaidCreation();
     QString generateRaidDeviceName() const;
     QString raidTypeToMdadmLevel(RaidType type) const;
+    bool checkDevicePartitionsInMdadmConf();
+    bool addDevicePartitionsToMdadmConf();
+    bool addRaidToMdadmConf(const QString &raidDevice);
+    void ensureMdadmConfSetup();
+    bool updateInitramfs();
+    bool removeRaidFromMdadmConf(const QString &raidDevice);
+    void finishRaidDeletion();
+    void updateRaidFilesystemInfo(RaidInfo *raidInfo);
+    void stopRaidArray();
+    void processNextSuperblockClean();
+
 };
 
 #endif // DISKMANAGER_H

@@ -55,6 +55,28 @@ MainWindow::MainWindow(QWidget *parent) :
     connect(m_diskManager, &DiskManager::deviceUnmounted,
                 this, &MainWindow::onDeviceUnmounted);
 
+    connect(m_diskManager, &DiskManager::raidStopProgress,
+            this, [this](const QString &message) {
+                ui->statusBar->showMessage(message, 3000);
+            });
+    connect(m_diskManager, &DiskManager::raidStopCompleted,
+            this, [this](bool success, const QString &raidDevice) {
+                if (success) {
+                    ui->statusBar->showMessage(tr("RAID %1 stopped successfully").arg(raidDevice), 3000);
+                } else {
+                    ui->statusBar->showMessage(tr("Failed to stop RAID %1").arg(raidDevice), 3000);
+                }
+            });
+    connect(m_diskManager, &DiskManager::raidDeletionCompleted,
+            this, [this](bool success, const QString &raidDevice) {
+                if (success) {
+                    ui->statusBar->showMessage(tr("RAID %1 deleted successfully").arg(raidDevice), 5000);
+                    onRefreshDevices();
+                } else {
+                    ui->statusBar->showMessage(tr("Failed to delete RAID %1").arg(raidDevice), 5000);
+                }
+            });
+
     // Подключаем сигналы интерфейса
     connect(ui->btnRefreshDevices, &QPushButton::clicked,
             this, &MainWindow::onRefreshDevices);
@@ -76,6 +98,8 @@ MainWindow::MainWindow(QWidget *parent) :
             this, &MainWindow::onUnmountPartitionClicked);
     connect(ui->actionCreateRaid, &QAction::triggered,
             this, &MainWindow::onCreateRaidClicked);
+    connect(ui->actionDestroyRaid, &QAction::triggered,
+            this, &MainWindow::onDeleteRaidClicked);
 
     // Подключаем кнопки управления RAID
     connect(ui->btnMarkFaulty, &QPushButton::clicked,
@@ -181,6 +205,85 @@ void MainWindow::onCreateRaidClicked()
 
     dialog->deleteLater();
 }
+
+void MainWindow::onDeleteRaidClicked()
+{
+    // Получаем выбранный элемент
+    QTreeWidgetItem *item = ui->treeDevices->currentItem();
+    if (!item) {
+        QMessageBox::warning(this, tr("No RAID Selected"),
+                            tr("Please select a RAID array to delete."));
+        return;
+    }
+
+    bool isMounted = m_diskManager->isDeviceMounted(item->text(0));
+    // Проверяем, является ли выбранное устройство RAID массивом
+    if (!isSelectedItemRaid()) {
+        QMessageBox::warning(this, tr("Invalid Selection"),
+                            tr("Please select a RAID array, not a disk or partition."));
+        return;
+    }
+
+    if (isMounted) {
+        QMessageBox::warning(this, tr("Device is mounted"),
+                            tr("Please unmount device."));
+        return;
+    }
+
+    QString raidPath = getSelectedDevicePath();
+    if (raidPath.isEmpty()) {
+        QMessageBox::warning(this, tr("Invalid RAID"),
+                            tr("Cannot determine RAID array path."));
+        return;
+    }
+
+    // Находим информацию о RAID массиве
+    const DiskStructure& diskStructure = m_diskManager->getDiskStructure();
+    RaidInfo selectedRaid;
+    bool raidFound = false;
+
+    for (const RaidInfo &raid : diskStructure.getRaids()) {
+        if (raid.devicePath == raidPath) {
+            selectedRaid = raid;
+            raidFound = true;
+            break;
+        }
+    }
+
+    if (!raidFound) {
+        QMessageBox::warning(this, tr("RAID Not Found"),
+                            tr("Could not find information about RAID array %1.")
+                               .arg(raidPath));
+        return;
+    }
+
+    // Создаем и показываем диалог удаления RAID
+    DeleteRaidDialog *dialog = new DeleteRaidDialog(selectedRaid, this);
+
+    // Подключаем сигналы диалога к DiskManager
+    connect(dialog, &DeleteRaidDialog::deleteRaidRequested,
+            m_diskManager, &DiskManager::deleteRaidArray);
+
+    // Подключаем сигналы DiskManager к диалогу
+    connect(m_diskManager, &DiskManager::raidStopProgress,
+            dialog, &DeleteRaidDialog::onRaidStopProgress);
+    connect(m_diskManager, &DiskManager::raidStopCompleted,
+            dialog, &DeleteRaidDialog::onRaidStopCompleted);
+    connect(m_diskManager, &DiskManager::superblockCleanProgress,
+            dialog, &DeleteRaidDialog::onSuperblockCleanProgress);
+    connect(m_diskManager, &DiskManager::deviceWipeCompleted,
+            dialog, &DeleteRaidDialog::onWipeProgressUpdate);
+    connect(m_diskManager, &DiskManager::raidDeletionCompleted,
+            dialog, &DeleteRaidDialog::onRaidDeletionCompleted);
+
+    // Показываем диалог
+    if (dialog->exec() == QDialog::Accepted) {
+        ui->statusBar->showMessage(tr("RAID array deletion completed"), 5000);
+    }
+
+    dialog->deleteLater();
+}
+
 
 void MainWindow::onMountPartitionClicked()
 {
@@ -632,14 +735,12 @@ void MainWindow::onFormatPartitionClicked()
         return;
     }
 
-    // Проверяем, не смонтирован ли раздел
-    QString mountPoint = item->text(5); // Колонка Mount Point
-    if (!mountPoint.isEmpty()) {
+    bool isMounted = m_diskManager->isDeviceMounted(item->text(0));
+    if (isMounted) {
         QMessageBox::warning(this, tr("Partition is Mounted"),
-                            tr("Cannot format partition %1 because it is currently mounted at %2.\n\n"
+                            tr("Cannot format partition %1 because it is currently mounted.\n\n"
                                "Please unmount the partition first.")
-                               .arg(partitionPath)
-                               .arg(mountPoint));
+                               .arg(partitionPath));
         return;
     }
 
@@ -699,15 +800,14 @@ QString MainWindow::getSelectedPartitionPath() const
 
 void MainWindow::updateInterface()
 {
-    // ЗАМЕНИТЬ создание копии НА получение ссылки:
     const DiskStructure& diskStructure = m_diskManager->getDiskStructure();
 
     ui->treeDevices->clear();
 
     if (m_showAllDevices) {
-        populateAllDevicesView(diskStructure);  // ПЕРЕДАТЬ ссылку
+        populateAllDevicesView(diskStructure);
     } else {
-        populateRaidView(diskStructure);        // ПЕРЕДАТЬ ссылку
+        populateRaidView(diskStructure);
     }
 
     updateButtonState();
@@ -865,6 +965,31 @@ QTreeWidgetItem* MainWindow::addRaidMemberToTree(QTreeWidgetItem* parentItem, co
     return item;
 }
 
+bool MainWindow::isSelectedItemRaidMember() const
+{
+    QTreeWidgetItem *item = ui->treeDevices->currentItem();
+    if (!item) {
+        return false;
+    }
+
+    // Если элемент имеет родителя (это раздел), проверяем его статус напрямую
+    if (item->parent() != nullptr) {
+        QString statusText = item->text(2); // Колонка Status
+        return statusText.contains("member", Qt::CaseInsensitive);
+    }
+
+    // Если элемент родитель (диск), проверяем всех его детей
+    for (int i = 0; i < item->childCount(); ++i) {
+        QTreeWidgetItem *child = item->child(i);
+        QString childStatusText = child->text(2); // Колонка Status
+        if (childStatusText.contains("member", Qt::CaseInsensitive)) {
+            return true; // Хотя бы один дочерний элемент является членом RAID
+        }
+    }
+
+    return false;
+}
+
 void MainWindow::updateButtonState()
 {
     // Получаем выбранный элемент
@@ -882,6 +1007,7 @@ void MainWindow::updateButtonState()
     ui->actionCreatePartitionTable->setEnabled(false);
     ui->actionMountPartition->setEnabled(false);
     ui->actionUnmountPartition->setEnabled(false);
+    ui->actionDestroyRaid->setEnabled(false);
 
     if (!item || !m_diskManager) {
         return;
@@ -897,7 +1023,16 @@ void MainWindow::updateButtonState()
     bool isPartition = isSelectedItemPartition();
     bool isRaid = isSelectedItemRaid();
     bool isRaidMember = item->parent() && item->parent()->text(0).contains("md");
-    bool isMountable = isSelectedItemMountable();
+    bool isPartitionRaidMember = isSelectedItemRaidMember();
+
+    // ОТЛАДОЧНАЯ ИНФОРМАЦИЯ - можно удалить после исправления
+    qDebug() << "=== DEBUG updateButtonState ===";
+    qDebug() << "Device path:" << devicePath;
+    qDebug() << "isDisk:" << isDisk;
+    qDebug() << "isPartition:" << isPartition;
+    qDebug() << "isRaid:" << isRaid;
+    qDebug() << "isRaidMember:" << isRaidMember;
+    qDebug() << "isPartitionRaidMember:" << isPartitionRaidMember;
 
     // Активируем действия для дисков
     if (isDisk) {
@@ -910,42 +1045,79 @@ void MainWindow::updateButtonState()
         QString mountPoint = item->text(5); // Колонка Mount Point
         bool isMounted = !mountPoint.isEmpty();
 
-        // В режиме RAID удаление разделов недоступно
-        ui->actionDeletePartition->setEnabled(!isMounted);
-        ui->actionFormatPartition->setEnabled(!isMounted);
+        // Запрещаем операции для партиций, входящих в RAID
+        if (!isPartitionRaidMember) {
+            ui->actionDeletePartition->setEnabled(!isMounted);
+            ui->actionFormatPartition->setEnabled(!isMounted);
+        }
     }
 
-    // Форматирование доступно для RAID массивов (но не их членов)
+
     if (isRaid && !isRaidMember) {
         ui->actionFormatPartition->setEnabled(true);
     }
 
-    // Активируем действия монтирования/размонтирования
-    if (isMountable) {
-        bool isMounted = m_diskManager->isDeviceMounted(devicePath);
-        QString filesystem = m_diskManager->getDeviceFilesystem(devicePath);
-        bool hasFilesystem = !filesystem.isEmpty() && filesystem != "unknown";
+    // Получаем информацию о монтировании и файловой системе
+    bool isMounted = m_diskManager->isDeviceMounted(devicePath);
+    QString filesystem = m_diskManager->getDeviceFilesystem(devicePath);
+    bool hasFilesystem = !filesystem.isEmpty() &&
+                        filesystem != "unknown" &&
+                        filesystem != "-" &&
+                        !filesystem.isNull();
 
-        // Монтирование доступно для немонтированных устройств с файловой системой
-        // Включая RAID массивы в режиме RAID
-        if (m_showAllDevices) {
-            // В режиме "Все устройства" - для разделов и RAID
+    // ОТЛАДОЧНАЯ ИНФОРМАЦИЯ для файловой системы
+    qDebug() << "isMounted:" << isMounted;
+    qDebug() << "filesystem:" << filesystem;
+    qDebug() << "hasFilesystem:" << hasFilesystem;
+
+    // Проверяем файловую систему также из UI (колонка 2)
+    QString uiFilesystem = item->text(2);
+    bool hasUiFilesystem = !uiFilesystem.isEmpty() &&
+                          uiFilesystem != "-" &&
+                          uiFilesystem != "unknown" &&
+                          !uiFilesystem.isNull();
+
+    qDebug() << "UI filesystem:" << uiFilesystem;
+    qDebug() << "hasUiFilesystem:" << hasUiFilesystem;
+
+    // Используем файловую систему из UI, если основная проверка не работает
+    if (!hasFilesystem && hasUiFilesystem) {
+        hasFilesystem = hasUiFilesystem;
+        qDebug() << "Using UI filesystem info";
+    }
+
+    // Логика монтирования
+    if (m_showAllDevices) {
+        // В режиме "Все устройства"
+        if (isPartition && !isPartitionRaidMember) {
+            // Для обычных разделов (не членов RAID)
             ui->actionMountPartition->setEnabled(!isMounted && hasFilesystem);
             ui->actionUnmountPartition->setEnabled(isMounted);
-        } else {
-            // В режиме "Только RAID" - только для RAID массивов (не их членов)
-            if (isRaid && !isRaidMember) {
-                ui->actionMountPartition->setEnabled(!isMounted && hasFilesystem);
-                ui->actionUnmountPartition->setEnabled(isMounted);
-            }
+            qDebug() << "Partition mount enabled:" << (!isMounted && hasFilesystem);
+        } else if (isRaid && !isRaidMember) {
+            // Для RAID массивов (не их членов)
+            ui->actionMountPartition->setEnabled(!isMounted && hasFilesystem);
+            ui->actionUnmountPartition->setEnabled(isMounted);
+            qDebug() << "RAID mount enabled:" << (!isMounted && hasFilesystem);
+        }
+    } else {
+        // В режиме "Только RAID" - только для RAID массивов верхнего уровня
+        if (isRaid && !isRaidMember) {
+            ui->actionMountPartition->setEnabled(!isMounted && hasFilesystem);
+            ui->actionUnmountPartition->setEnabled(isMounted);
+            qDebug() << "RAID-only mode mount enabled:" << (!isMounted && hasFilesystem);
         }
     }
 
+    qDebug() << "Final mount action enabled:" << ui->actionMountPartition->isEnabled();
+    qDebug() << "===============================";
+
+    ui->actionDestroyRaid->setEnabled(isRaid);
     // Кнопка "Пометить как неисправное" доступна только для устройств в RAID
     ui->btnMarkFaulty->setEnabled(isRaidMember);
 
     // Кнопка "Добавить в RAID" доступна только для разделов, не входящих в RAID
-    ui->btnAddToRaid->setEnabled(isPartition && !isRaidMember);
+    ui->btnAddToRaid->setEnabled(isPartition && !isRaidMember && !isPartitionRaidMember);
 
     // Кнопка "Удалить из RAID" доступна только для устройств в RAID
     ui->btnRemoveFromRaid->setEnabled(isRaidMember);

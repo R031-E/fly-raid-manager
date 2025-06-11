@@ -9,6 +9,9 @@ DiskManager::DiskManager(QObject *parent) : QObject(parent)
 {
     m_commandExecutor = new CommandExecutor(this);
     m_currentCommand = CommandType::NONE;
+    m_hasDevicePartitionsLine = false;
+    m_isDeletingRaid = false;  // ДОБАВИТЬ ЭТУ СТРОКУ
+    m_currentWipeContext = WipeContext::RAID_CREATION;
 
     // Подключаем сигналы CommandExecutor
     connect(m_commandExecutor, &CommandExecutor::outputAvailable,
@@ -17,10 +20,251 @@ DiskManager::DiskManager(QObject *parent) : QObject(parent)
             this, &DiskManager::handleCommandErrorOutput);
     connect(m_commandExecutor, &CommandExecutor::finished,
             this, &DiskManager::handleCommandFinished);
+
+    ensureMdadmConfSetup();
 }
 
 DiskManager::~DiskManager()
 {
+}
+
+void DiskManager::ensureMdadmConfSetup()
+{
+    // Проверяем и настраиваем mdadm.conf при инициализации
+    m_hasDevicePartitionsLine = checkDevicePartitionsInMdadmConf();
+
+    if (m_hasDevicePartitionsLine) {
+        emit commandOutput(tr("mdadm.conf already contains 'DEVICE partitions' line"));
+    } else {
+        emit commandOutput(tr("mdadm.conf missing 'DEVICE partitions' line - will be added when creating RAID"));
+    }
+}
+
+bool DiskManager::checkDevicePartitionsInMdadmConf()
+{
+    // Проверяем наличие строки "DEVICE partitions" в /etc/mdadm/mdadm.conf
+    QString output, errorOutput;
+    int exitCode = m_commandExecutor->executeSync("grep",
+        QStringList() << "-q" << "^DEVICE partitions" << "/etc/mdadm/mdadm.conf",
+        output, errorOutput);
+
+    // grep возвращает 0 если строка найдена, 1 если не найдена
+    return (exitCode == 0);
+}
+
+bool DiskManager::addDevicePartitionsToMdadmConf()
+{
+    // Добавляем строку "DEVICE partitions" в mdadm.conf
+    QStringList args;
+    args << "-c" << "echo 'DEVICE partitions' | sudo tee -a /etc/mdadm/mdadm.conf > /dev/null";
+
+    QString output, errorOutput;
+    int exitCode = m_commandExecutor->executeSync("sh", args, output, errorOutput);
+
+    if (exitCode == 0) {
+        emit commandOutput(tr("Added 'DEVICE partitions' to /etc/mdadm/mdadm.conf"));
+        return true;
+    } else {
+        emit commandOutput(tr("Failed to add 'DEVICE partitions' to mdadm.conf: %1").arg(errorOutput));
+        return false;
+    }
+}
+
+bool DiskManager::addRaidToMdadmConf(const QString &raidDevice)
+{
+    emit commandOutput(tr("Adding RAID array %1 to /etc/mdadm/mdadm.conf...").arg(raidDevice));
+    QString scanOutput, scanErrorOutput;
+    int scanExitCode = m_commandExecutor->executeAsAdminSync("mdadm",
+        QStringList() << "--detail" << "--scan",
+        scanOutput, scanErrorOutput);
+
+    if (scanExitCode != 0) {
+        emit commandOutput(tr("Failed to scan RAID arrays: %1").arg(scanErrorOutput));
+        return false;
+    }
+
+    // Шаг 2: Ищем строку для нашего устройства в выводе
+    QStringList lines = scanOutput.split('\n', Qt::SkipEmptyParts);
+    QString targetLine;
+
+    for (const QString &line : lines) {
+        if (line.trimmed().startsWith("ARRAY") && line.contains(raidDevice)) {
+            targetLine = line.trimmed();
+            break;
+        }
+    }
+
+    if (targetLine.isEmpty()) {
+        emit commandOutput(tr("Could not find ARRAY line for device %1 in mdadm scan output").arg(raidDevice));
+        return false;
+    }
+
+    // Шаг 3: Добавляем только найденную строку в mdadm.conf
+    QString addOutput, addErrorOutput;
+    int addExitCode = m_commandExecutor->executeAsAdminSync("sh",
+        QStringList() << "-c" << QString("echo '%1' >> /etc/mdadm/mdadm.conf").arg(targetLine),
+        addOutput, addErrorOutput);
+
+    if (addExitCode == 0) {
+        emit commandOutput(tr("Successfully added RAID array %1 to mdadm.conf").arg(raidDevice));
+        emit commandOutput(tr("Added line: %1").arg(targetLine));
+        return true;
+    } else {
+        emit commandOutput(tr("Failed to add RAID array to mdadm.conf: %1").arg(addErrorOutput));
+        return false;
+    }
+}
+
+bool DiskManager::updateInitramfs()
+{
+    emit commandOutput(tr("Updating initramfs to reflect mdadm.conf changes..."));
+    emit commandOutput(tr("This may take a few moments..."));
+
+    QString output, errorOutput;
+    int exitCode = m_commandExecutor->executeAsAdminSync("update-initramfs",
+        QStringList() << "-u",
+        output, errorOutput);
+
+    if (exitCode == 0) {
+        emit commandOutput(tr("✓ Successfully updated initramfs"));
+        if (!output.trimmed().isEmpty()) {
+            // Показываем вывод команды, если он есть
+            QStringList outputLines = output.split('\n', Qt::SkipEmptyParts);
+            for (const QString &line : outputLines) {
+                emit commandOutput(tr("  %1").arg(line.trimmed()));
+            }
+        }
+        return true;
+    } else {
+        emit commandOutput(tr("Failed to update initramfs: %1").arg(errorOutput));
+        emit commandOutput(tr("RAID configuration may not persist after reboot"));
+        emit commandOutput(tr("Manual execution of 'sudo update-initramfs -u' may be required"));
+        return false;
+    }
+}
+
+void DiskManager::deleteRaidArray(const QString &raidDevice, const QStringList &memberDevices)
+{
+    m_raidToDelete = raidDevice;
+    m_devicesToCleanSuperblock = memberDevices;
+    m_cleanedSuperblockDevices.clear();
+    m_devicesToWipe = memberDevices; // Переиспользуем для wipefs
+    m_wipedDevices.clear();
+    m_isDeletingRaid = true;
+    m_currentWipeContext = WipeContext::RAID_DELETION;
+
+    emit commandOutput(tr("Starting RAID %1 deletion process").arg(raidDevice));
+
+    // Начинаем с остановки RAID массива
+    stopRaidArray();
+}
+
+void DiskManager::stopRaidArray()
+{
+    QStringList args;
+    args << "--stop" << m_raidToDelete;
+
+    m_currentCommand = CommandType::STOP_RAID_ARRAY;
+
+    emit commandOutput(tr("Stopping RAID array %1...").arg(m_raidToDelete));
+    emit raidStopProgress(tr("Executing mdadm --stop %1").arg(m_raidToDelete));
+
+    if (!m_commandExecutor->executeAsAdmin("mdadm", args)) {
+        qWarning() << "Failed to run mdadm stop command";
+        emit raidStopCompleted(false, m_raidToDelete);
+    }
+}
+
+void DiskManager::processNextSuperblockClean()
+{
+    /*if (m_devicesToCleanSuperblock.isEmpty()) {
+        // Все суперблоки очищены, начинаем wipefs
+        processNextWipeOperation();
+        return;
+    }*/
+
+    QString deviceToClean = m_devicesToCleanSuperblock.takeFirst();
+    m_currentSuperblockDevice = deviceToClean;
+
+    QStringList args;
+    args << "--zero-superblock" << deviceToClean;
+
+    m_currentCommand = CommandType::CLEAN_SUPERBLOCK;
+
+    emit commandOutput(tr("Cleaning superblock from %1...").arg(deviceToClean));
+
+    QString output, errorOutput;
+    int exitCode = m_commandExecutor->executeAsAdminSync("mdadm", args, output, errorOutput);
+
+    bool success = (exitCode == 0);
+    emit superblockCleanProgress(deviceToClean, success);
+
+    if (success) {
+        emit commandOutput(tr("✓ Superblock cleared from %1").arg(deviceToClean));
+        m_cleanedSuperblockDevices.append(deviceToClean);
+        emit m_commandExecutor->finished(0, QProcess::NormalExit);
+    } else {
+        emit commandOutput(tr("✗ Failed to clear superblock from %1: %2").arg(deviceToClean).arg(errorOutput));
+        emit m_commandExecutor->finished(1, QProcess::CrashExit);
+    }
+
+    /*if (!m_commandExecutor->executeAsAdmin("mdadm", args)) {
+        qWarning() << "Failed to run mdadm zero-superblock command for" << deviceToClean;
+        emit superblockCleanProgress(deviceToClean, false);
+    }*/
+}
+
+bool DiskManager::removeRaidFromMdadmConf(const QString &raidDevice)
+{
+    emit commandOutput(tr("Removing RAID array %1 from /etc/mdadm/mdadm.conf...").arg(raidDevice));
+
+    // Экранируем слэши в пути устройства для sed
+    QString escapedPath = raidDevice;
+    escapedPath.replace("/", "\\/");
+
+    // Удаляем строки содержащие путь к RAID устройству
+    QStringList args;
+    args << "-c" << QString("sed -i '/%1/d' /etc/mdadm/mdadm.conf").arg(escapedPath);
+
+    QString output, errorOutput;
+    int exitCode = m_commandExecutor->executeAsAdminSync("sh", args, output, errorOutput);
+
+    if (exitCode == 0) {
+        emit commandOutput(tr("Successfully removed RAID array %1 from mdadm.conf").arg(raidDevice));
+        return true;
+    } else {
+        emit commandOutput(tr("Failed to remove RAID array from mdadm.conf: %1").arg(errorOutput));
+        return false;
+    }
+}
+
+void DiskManager::finishRaidDeletion()
+{
+    if (m_raidToDelete.isEmpty()) {
+        return;
+    }
+
+    emit commandOutput(tr("Finalizing RAID deletion..."));
+
+    // Удаляем запись из mdadm.conf
+    bool mdadmConfUpdated = removeRaidFromMdadmConf(m_raidToDelete);
+
+    // Обновляем initramfs
+    if (mdadmConfUpdated) {
+        emit commandOutput(tr("Updating system boot configuration..."));
+        updateInitramfs();
+    }
+
+    // Завершаем процесс удаления
+    emit commandOutput(tr("RAID array %1 deletion completed successfully").arg(m_raidToDelete));
+    emit raidDeletionCompleted(true, m_raidToDelete);
+
+    // Очищаем состояние
+    m_raidToDelete.clear();
+    m_isDeletingRaid = false;
+
+    // Обновляем список устройств
+    refreshDevices();
 }
 
 void DiskManager::refreshDevices()
@@ -54,6 +298,8 @@ void DiskManager::createRaidArray(RaidType raidType, const QStringList &devices,
     m_devicesToWipe = devices;
     m_wipedDevices.clear();
     m_createdRaidDevice.clear();
+    m_isDeletingRaid = false;  // ДОБАВИТЬ ЭТУ СТРОКУ
+    m_currentWipeContext = WipeContext::RAID_CREATION;  // ДОБАВИТЬ ЭТУ СТРОКУ
 
     emit raidCreationStarted();
     emit commandOutput(tr("Starting RAID %1 creation with %2 devices")
@@ -62,6 +308,42 @@ void DiskManager::createRaidArray(RaidType raidType, const QStringList &devices,
 
     // Начинаем с очистки первого устройства
     processNextWipeOperation();
+}
+
+void DiskManager::processAllWipeOperationsSync()
+{
+    emit commandOutput(tr("Starting wipefs operations for %1 devices...").arg(m_devicesToWipe.size()));
+
+    // Выполняем wipefs для всех устройств последовательно
+    for (const QString &devicePath : m_devicesToWipe) {
+        emit commandOutput(tr("Wiping device %1...").arg(devicePath));
+
+        QStringList args;
+        args << "--all" << "--force" << devicePath;
+
+        QString output, errorOutput;
+        int exitCode = m_commandExecutor->executeAsAdminSync("wipefs", args, output, errorOutput);
+
+        bool success = (exitCode == 0);
+        emit deviceWipeCompleted(devicePath, success);
+
+        if (success) {
+            emit commandOutput(tr("✓ Device %1 wiped successfully").arg(devicePath));
+            m_wipedDevices.append(devicePath);
+        } else {
+            emit commandOutput(tr("✗ Failed to wipe device %1: %2").arg(devicePath).arg(errorOutput));
+        }
+    }
+
+    // Очищаем список устройств для wipefs
+    m_devicesToWipe.clear();
+
+    // Проверяем контекст и завершаем соответствующую операцию
+    if (m_currentWipeContext == WipeContext::RAID_DELETION) {
+        emit commandOutput(tr("All cleanup operations completed, finalizing RAID deletion..."));
+        finishRaidDeletion();
+    }
+    // Для создания RAID оставляем существующую логику через processNextWipeOperation()
 }
 
 void DiskManager::wipeDevice(const QString &devicePath)
@@ -76,7 +358,12 @@ void DiskManager::wipeDevice(const QString &devicePath)
     m_currentCommand = CommandType::WIPE_DEVICE;
 
     emit commandOutput(tr("Wiping device %1...").arg(devicePath));
-    emit raidCreationProgress(tr("Preparing device %1").arg(devicePath));
+
+    if (m_currentWipeContext == WipeContext::RAID_CREATION) {
+        emit raidCreationProgress(tr("Preparing device %1").arg(devicePath));
+    } else {
+        emit raidStopProgress(tr("Wiping device %1").arg(devicePath));
+    }
 
     // Запускаем wipefs с правами администратора
     if (!m_commandExecutor->executeAsAdmin("wipefs", args)) {
@@ -87,15 +374,49 @@ void DiskManager::wipeDevice(const QString &devicePath)
 
 void DiskManager::processNextWipeOperation()
 {
-    if (m_devicesToWipe.isEmpty()) {
-        // Все устройства очищены, начинаем создание RAID
-        executeRaidCreation();
+    /*if (m_devicesToWipe.isEmpty()) {
+        // Все устройства очищены, переходим к следующему этапу в зависимости от контекста
+        if (m_currentWipeContext == WipeContext::RAID_CREATION) {
+            executeRaidCreation();
+        } else if (m_currentWipeContext == WipeContext::RAID_DELETION) {
+            finishRaidDeletion();
+        }
         return;
-    }
+    }*/
 
     // Берем следующее устройство для очистки
     QString deviceToWipe = m_devicesToWipe.takeFirst();
-    wipeDevice(deviceToWipe);
+    m_currentWipeDevice = deviceToWipe;
+
+    QStringList args;
+    args << "--all" << "--force" << deviceToWipe;
+
+    m_currentCommand = CommandType::WIPE_DEVICE;
+
+    emit commandOutput(tr("Wiping device %1...").arg(deviceToWipe));
+
+    // Устанавливаем правильное сообщение в зависимости от контекста
+    if (m_currentWipeContext == WipeContext::RAID_CREATION) {
+        emit raidCreationProgress(tr("Preparing device %1").arg(deviceToWipe));
+    }
+
+    // Выполняем wipefs синхронно
+    QString output, errorOutput;
+    int exitCode = m_commandExecutor->executeAsAdminSync("wipefs", args, output, errorOutput);
+
+    bool success = (exitCode == 0);
+    emit deviceWipeCompleted(deviceToWipe, success);
+
+    if (success) {
+        emit commandOutput(tr("✓ Device %1 wiped successfully").arg(deviceToWipe));
+        m_wipedDevices.append(deviceToWipe);
+        // Эмитим сигнал успешного завершения
+        emit m_commandExecutor->finished(0, QProcess::NormalExit);
+    } else {
+        emit commandOutput(tr("✗ Failed to wipe device %1: %2").arg(deviceToWipe).arg(errorOutput));
+        // Эмитим сигнал ошибки
+        emit m_commandExecutor->finished(1, QProcess::CrashExit);
+    }
 }
 
 void DiskManager::executeRaidCreation()
@@ -183,13 +504,6 @@ void DiskManager::mountDevice(const QString &devicePath, const QString &mountPoi
         emit deviceMounted(false, devicePath, mountPoint);
         return;
     }
-
-    // Создаем точку монтирования если она не существует
-    /*if (!createMountPoint(mountPoint)) {
-        emit commandOutput(tr("Failed to create mount point: %1").arg(mountPoint));
-        emit deviceMounted(false, devicePath, mountPoint);
-        return;
-    }*/
 
     // Сохраняем данные для обработки результата
     m_currentMountDevice = devicePath;
@@ -330,13 +644,14 @@ bool DiskManager::validateUnmountOperation(const QString &devicePath, QString &e
 bool DiskManager::addToFstab(const QString &devicePath, const QString &mountPoint, const QString &filesystem, const QString &options)
 {
     // Получаем UUID устройства для более надежного монтирования
-    //ПЕРЕПИСАТЬ
-    QString uuid;
-    QProcess blkidProcess;
-    blkidProcess.start("sudo blkid", QStringList() << "-s" << "UUID" << "-o" << "value" << devicePath);
-    if (blkidProcess.waitForFinished(100000)) {
-        uuid = QString::fromUtf8(blkidProcess.readAllStandardOutput()).trimmed();
-        qDebug() << uuid;
+    QString uuid = "";
+    QString output, errorOutput;
+    int exitCode = m_commandExecutor->executeAsAdminSync("blkid",
+        QStringList() << "-s" << "UUID" << "-o" << "value" << devicePath,
+        output, errorOutput);
+
+    if (exitCode == 0 && !output.trimmed().isEmpty()) {
+        uuid = output.trimmed();
     }
 
     // Формируем запись для fstab
@@ -377,11 +692,14 @@ bool DiskManager::addToFstab(const QString &devicePath, const QString &mountPoin
 bool DiskManager::removeFromFstab(const QString &devicePath)
 {
     // Получаем UUID устройства
-    QString uuid;
-    QProcess blkidProcess;
-    blkidProcess.start("blkid", QStringList() << "-s" << "UUID" << "-o" << "value" << devicePath);
-    if (blkidProcess.waitForFinished(5000)) {
-        uuid = QString::fromUtf8(blkidProcess.readAllStandardOutput()).trimmed();
+    QString uuid = "";
+    QString output, errorOutput;
+    int exitCode = m_commandExecutor->executeAsAdminSync("blkid",
+        QStringList() << "-s" << "UUID" << "-o" << "value" << devicePath,
+        output, errorOutput);
+
+    if (exitCode == 0 && !output.trimmed().isEmpty()) {
+        uuid = output.trimmed();
     }
 
     // Формируем команду для удаления строки из fstab
@@ -451,30 +769,6 @@ bool DiskManager::createMountPoint(const QString &mountPoint)
     return mkdirProcess.exitCode() == 0;
 }
 
-bool DiskManager::removeMountPointIfEmpty(const QString &mountPoint)
-{
-    QDir mountDir(mountPoint);
-    if (!mountDir.exists()) {
-        return true; // Уже не существует
-    }
-
-    // Проверяем, что каталог пустой
-    QFileInfoList entries = mountDir.entryInfoList(QDir::NoDotAndDotDot | QDir::AllEntries);
-    if (!entries.isEmpty()) {
-        return true; // Не удаляем непустой каталог
-    }
-
-    // Удаляем пустой каталог
-    QProcess rmdirProcess;
-    rmdirProcess.start("sudo", QStringList() << "rmdir" << mountPoint);
-    if (!rmdirProcess.waitForFinished(5000)) {
-        qWarning() << "Failed to remove mount point:" << mountPoint;
-        return false;
-    }
-
-    return rmdirProcess.exitCode() == 0;
-}
-
 void DiskManager::handleCommandOutput(const QString &output)
 {
     // Передаем вывод для отображения
@@ -535,7 +829,7 @@ void DiskManager::handleCommandFinished(int exitCode, QProcess::ExitStatus exitS
             m_currentCommand = CommandType::MDADM_SCAN;
             if (!m_commandExecutor->executeAsAdmin("mdadm", mdadmArgs)) {
                 qDebug() << "Failed to run mdadm scan command";
-                emit devicesRefreshed(true); // Считаем успехом, т.к. основная информация получена
+                emit devicesRefreshed(true);
             }
         }
         break;
@@ -550,7 +844,6 @@ void DiskManager::handleCommandFinished(int exitCode, QProcess::ExitStatus exitS
             m_currentCommand = CommandType::MDADM_DETAIL;
             if (!m_commandExecutor->executeAsAdmin("mdadm", detailArgs)) {
                 qDebug() << "Failed to run mdadm detail command for" << raidPath;
-                // Продолжаем с оставшимися RAID-массивами
                 if (!m_raidDetailsToCheck.isEmpty()) {
                     handleCommandFinished(0, QProcess::NormalExit);
                 } else {
@@ -558,13 +851,11 @@ void DiskManager::handleCommandFinished(int exitCode, QProcess::ExitStatus exitS
                 }
             }
         } else {
-            // Все готово
             emit devicesRefreshed(true);
         }
         break;
 
     case CommandType::MDADM_DETAIL:
-        // После mdadm detail проверяем, есть ли еще RAID для проверки
         if (!m_raidDetailsToCheck.isEmpty()) {
             QString raidPath = m_raidDetailsToCheck.takeFirst();
             QStringList detailArgs;
@@ -573,7 +864,6 @@ void DiskManager::handleCommandFinished(int exitCode, QProcess::ExitStatus exitS
             m_currentCommand = CommandType::MDADM_DETAIL;
             if (!m_commandExecutor->executeAsAdmin("mdadm", detailArgs)) {
                 qDebug() << "Failed to run mdadm detail command for" << raidPath;
-                // Продолжаем с оставшимися RAID-массивами
                 if (!m_raidDetailsToCheck.isEmpty()) {
                     handleCommandFinished(0, QProcess::NormalExit);
                 } else {
@@ -581,7 +871,6 @@ void DiskManager::handleCommandFinished(int exitCode, QProcess::ExitStatus exitS
                 }
             }
         } else {
-            // Все готово
             emit devicesRefreshed(true);
         }
         break;
@@ -593,14 +882,12 @@ void DiskManager::handleCommandFinished(int exitCode, QProcess::ExitStatus exitS
         break;
 
     case CommandType::CREATE_PARTITION:
-        // После создания раздела обновляем список устройств
         emit partitionCreated(exitCode == 0 && exitStatus == QProcess::NormalExit);
         emit commandOutput(tr("parted created partition"));
         refreshDevices();
         break;
 
     case CommandType::DELETE_PARTITION:
-        // После удаления раздела обновляем список устройств
         emit partitionDeleted(exitCode == 0 && exitStatus == QProcess::NormalExit);
         if (exitCode == 0 && exitStatus == QProcess::NormalExit) {
             emit commandOutput(tr("Partition deleted successfully"));
@@ -611,7 +898,6 @@ void DiskManager::handleCommandFinished(int exitCode, QProcess::ExitStatus exitS
         break;
 
     case CommandType::FORMAT_PARTITION:
-        // После форматирования раздела обновляем список устройств
         emit partitionFormatted(exitCode == 0 && exitStatus == QProcess::NormalExit);
         if (exitCode == 0 && exitStatus == QProcess::NormalExit) {
             emit commandOutput(tr("Partition formatted successfully"));
@@ -625,7 +911,6 @@ void DiskManager::handleCommandFinished(int exitCode, QProcess::ExitStatus exitS
         break;
 
     case CommandType::MOUNT_DEVICE:
-        // После монтирования добавляем запись в fstab и обновляем список устройств
         if (exitCode == 0 && exitStatus == QProcess::NormalExit) {
             QString filesystem = getDeviceFilesystem(m_currentMountDevice);
             if (addToFstab(m_currentMountDevice, m_currentMountPoint, filesystem, "defaults")) {
@@ -645,7 +930,6 @@ void DiskManager::handleCommandFinished(int exitCode, QProcess::ExitStatus exitS
         break;
 
     case CommandType::UNMOUNT_DEVICE:
-        // После размонтирования удаляем запись из fstab и обновляем список устройств
         if (exitCode == 0 && exitStatus == QProcess::NormalExit) {
             if (removeFromFstab(m_currentMountDevice)) {
                 emit commandOutput(tr("Device %1 unmounted successfully and removed from fstab")
@@ -654,7 +938,6 @@ void DiskManager::handleCommandFinished(int exitCode, QProcess::ExitStatus exitS
                 emit commandOutput(tr("Device %1 unmounted, but failed to remove from fstab")
                                   .arg(m_currentMountDevice));
             }
-            //removeMountPointIfEmpty(m_currentMountPoint);
             emit deviceUnmounted(true, m_currentMountDevice);
         } else {
             emit commandOutput(tr("Failed to unmount device %1").arg(m_currentMountDevice));
@@ -662,36 +945,105 @@ void DiskManager::handleCommandFinished(int exitCode, QProcess::ExitStatus exitS
         }
         refreshDevices();
         break;
-    case CommandType::WIPE_DEVICE:
-        // После wipefs переходим к следующему устройству или созданию RAID
-        if (exitCode == 0 && exitStatus == QProcess::NormalExit) {
-            emit commandOutput(tr("Device %1 wiped successfully").arg(m_currentWipeDevice));
-            emit deviceWipeCompleted(m_currentWipeDevice, true);
-            m_wipedDevices.append(m_currentWipeDevice);
-        } else {
-            emit commandOutput(tr("Failed to wipe device %1").arg(m_currentWipeDevice));
-            emit deviceWipeCompleted(m_currentWipeDevice, false);
 
-            // Прерываем создание RAID при ошибке очистки
-            emit raidCreationCompleted(false, QString());
+    case CommandType::STOP_RAID_ARRAY:
+        emit raidStopCompleted(exitCode == 0 && exitStatus == QProcess::NormalExit, m_raidToDelete);
+        if (exitCode == 0 && exitStatus == QProcess::NormalExit) {
+            emit commandOutput(tr("RAID array %1 stopped successfully").arg(m_raidToDelete));
+            // Начинаем очистку суперблоков
+            processNextSuperblockClean();
+        } else {
+            emit commandOutput(tr("Failed to stop RAID array %1").arg(m_raidToDelete));
+            emit raidDeletionCompleted(false, m_raidToDelete);
+            m_isDeletingRaid = false;
+            m_raidToDelete.clear();
+        }
+        break;
+
+    case CommandType::CLEAN_SUPERBLOCK:
+        emit superblockCleanProgress(m_currentSuperblockDevice,
+                                    exitCode == 0 && exitStatus == QProcess::NormalExit);
+        /*if (exitCode == 0 && exitStatus == QProcess::NormalExit) {
+            emit commandOutput(tr("Superblock cleared from %1").arg(m_currentSuperblockDevice));
+            m_cleanedSuperblockDevices.append(m_currentSuperblockDevice);
+        } else {
+            emit commandOutput(tr("Failed to clear superblock from %1").arg(m_currentSuperblockDevice));
+        }*/
+
+        if (m_devicesToCleanSuperblock.isEmpty()) {
+            // Все суперблоки очищены, начинаем wipefs
+            processNextWipeOperation();
             return;
         }
+        else{
+            // Обрабатываем следующее устройство
+            processNextSuperblockClean();
+        }
+        break;
 
-        // Обрабатываем следующее устройство
-        processNextWipeOperation();
+    case CommandType::WIPE_DEVICE:
+        emit deviceWipeCompleted(m_currentWipeDevice, exitCode == 0 && exitStatus == QProcess::NormalExit);
+
+        /*if (exitCode != 0 || exitStatus != QProcess::NormalExit) {
+            // При ошибке wipefs прерываем операцию
+            if (m_currentWipeContext == WipeContext::RAID_CREATION) {
+                emit commandOutput(tr("Failed to wipe device %1, aborting RAID creation").arg(m_currentWipeDevice));
+                emit raidCreationCompleted(false, QString());
+            } else if (m_currentWipeContext == WipeContext::RAID_DELETION) {
+                emit commandOutput(tr("Failed to wipe device %1, RAID deletion may be incomplete").arg(m_currentWipeDevice));
+                emit raidDeletionCompleted(false, m_raidToDelete);
+                m_isDeletingRaid = false;
+                m_raidToDelete.clear();
+            }
+            return;
+        }*/
+
+        if (m_devicesToWipe.isEmpty()) {
+            // Все устройства обработаны, переходим к следующему этапу
+            if (m_currentWipeContext == WipeContext::RAID_CREATION) {
+                executeRaidCreation();
+            } else if (m_currentWipeContext == WipeContext::RAID_DELETION) {
+                finishRaidDeletion();
+            }
+        } else {
+            // Обрабатываем следующее устройство
+            processNextWipeOperation();
+        }
         break;
 
     case CommandType::CREATE_RAID_ARRAY:
-        // После создания RAID обновляем список устройств
         if (exitCode == 0 && exitStatus == QProcess::NormalExit) {
             emit commandOutput(tr("RAID array %1 created successfully").arg(m_createdRaidDevice));
+
+            bool mdadmConfUpdated = true;
+            if (!m_hasDevicePartitionsLine) {
+                if (addDevicePartitionsToMdadmConf()) {
+                    m_hasDevicePartitionsLine = true;
+                } else {
+                    mdadmConfUpdated = false;
+                }
+            }
+
+            if (mdadmConfUpdated) {
+                if (addRaidToMdadmConf(m_createdRaidDevice)) {
+                    emit commandOutput(tr("Updating system boot configuration..."));
+                    updateInitramfs();
+                } else {
+                    emit commandOutput(tr("RAID created but not added to mdadm.conf - manual configuration may be required"));
+                    mdadmConfUpdated = false;
+                }
+            }
+
+            if (mdadmConfUpdated) {
+                emit commandOutput(tr("RAID array fully configured and ready for use"));
+            }
+
             emit raidCreationCompleted(true, m_createdRaidDevice);
         } else {
             emit commandOutput(tr("Failed to create RAID array"));
             emit raidCreationCompleted(false, QString());
         }
 
-        // Обновляем список устройств в любом случае
         refreshDevices();
         break;
 
@@ -982,7 +1334,6 @@ void DiskManager::parseMdadmScanOutput(const QString &output)
 
         RaidInfo raid;
         bool foundDevice = false;
-        bool foundLevel = false;
 
         // Парсим строку с информацией о RAID
         QRegularExpression rxDevice("(/dev/md\\d+)");
@@ -997,31 +1348,14 @@ void DiskManager::parseMdadmScanOutput(const QString &output)
             }
         }
 
-        // Парсим уровень RAID
-        QRegularExpression rxLevel("level=([\\w\\d]+)");
-        QRegularExpressionMatch levelMatch = rxLevel.match(line);
-        if (levelMatch.hasMatch()) {
-            QString levelStr = levelMatch.captured(1).toLower();
-            if (levelStr == "raid0" || levelStr == "0") {
-                raid.type = RaidType::RAID0;
-            } else if (levelStr == "raid1" || levelStr == "1") {
-                raid.type = RaidType::RAID1;
-            } else if (levelStr == "raid5" || levelStr == "5") {
-                raid.type = RaidType::RAID5;
-            } else {
-                raid.type = RaidType::UNKNOWN;
-            }
-            foundLevel = true;
-        }
-
-        // Добавляем RAID в структуру, если найдены основные параметры
+        // Добавляем RAID в структуру, если найдено устройство
         if (foundDevice) {
-            // Устанавливаем значения по умолчанию
-            if (!foundLevel) {
-                raid.type = RaidType::UNKNOWN;
-            }
+            // Устанавливаем значения по умолчанию (уровень будет определен в parseMdadmDetailOutput)
+            raid.type = RaidType::UNKNOWN;
             raid.state = tr("unknown");
             raid.syncPercent = 100;
+            raid.filesystem = ""; // Будет определена позже
+            raid.mountPoint = ""; // Будет определена позже
 
             // Проверяем, не добавлен ли уже этот RAID
             bool alreadyExists = false;
@@ -1088,8 +1422,24 @@ void DiskManager::parseMdadmDetailOutput(const QString &output)
     for (const QString &line : lines) {
         QString trimmedLine = line.trimmed();
 
+        // Ищем уровень RAID
+        if (trimmedLine.contains("Raid Level :")) {
+            QStringList parts = trimmedLine.split(':', Qt::SkipEmptyParts);
+            if (parts.size() >= 2) {
+                QString levelStr = parts[1].trimmed().toLower();
+                if (levelStr == "raid0" || levelStr == "0") {
+                    targetRaid->type = RaidType::RAID0;
+                } else if (levelStr == "raid1" || levelStr == "1") {
+                    targetRaid->type = RaidType::RAID1;
+                } else if (levelStr == "raid5" || levelStr == "5") {
+                    targetRaid->type = RaidType::RAID5;
+                } else {
+                    targetRaid->type = RaidType::UNKNOWN;
+                }
+            }
+        }
         // Ищем состояние RAID
-        if (trimmedLine.contains("State :")) {
+        else if (trimmedLine.contains("State :")) {
             QStringList parts = trimmedLine.split(':', Qt::SkipEmptyParts);
             if (parts.size() >= 2) {
                 targetRaid->state = parts[1].trimmed();
@@ -1126,7 +1476,7 @@ void DiskManager::parseMdadmDetailOutput(const QString &output)
             if (parts.size() >= 6) {
                 // Формат: Number Major Minor RaidDevice State DeviceName
                 QString deviceName = parts.last(); // Имя устройства в последней колонке
-                QString devicePath = "/dev/" + deviceName;
+                QString devicePath = deviceName;
 
                 // Определяем статус устройства из предпоследней колонки или из состояния
                 QString statusStr = parts.size() > 6 ? parts[parts.size() - 2] : parts[4];
@@ -1142,6 +1492,8 @@ void DiskManager::parseMdadmDetailOutput(const QString &output)
                     status = DeviceStatus::REBUILDING;
                 } else if (statusStr.contains("sync", Qt::CaseInsensitive)) {
                     status = DeviceStatus::SYNCING;
+                } else if (statusStr.contains("active sync", Qt::CaseInsensitive)) {
+                    status = DeviceStatus::NORMAL;
                 }
 
                 RaidMemberInfo member(devicePath, status);
@@ -1152,6 +1504,44 @@ void DiskManager::parseMdadmDetailOutput(const QString &output)
             }
         }
     }
+
+    // После парсинга mdadm detail получаем информацию о файловой системе и монтировании
+    updateRaidFilesystemInfo(targetRaid);
+}
+
+// НОВАЯ ФУНКЦИЯ: Обновление информации о файловой системе RAID массива
+void DiskManager::updateRaidFilesystemInfo(RaidInfo *raidInfo)
+{
+    if (!raidInfo) {
+        return;
+    }
+
+    // Используем blkid для получения информации о файловой системе
+    QString output, errorOutput;
+    int exitCode = m_commandExecutor->executeAsAdminSync("blkid",
+        QStringList() << "-o" << "value" << "-s" << "TYPE" << raidInfo->devicePath,
+        output, errorOutput);
+
+    if (exitCode == 0 && !output.trimmed().isEmpty()) {
+        raidInfo->filesystem = output.trimmed();
+    }
+
+    // Проверяем, смонтирован ли RAID массив
+    QString mountOutput, mountErrorOutput;
+    int mountExitCode = m_commandExecutor->executeSync("findmnt",
+        QStringList() << "-n" << "-o" << "TARGET" << raidInfo->devicePath,
+        mountOutput, mountErrorOutput);
+
+    if (mountExitCode == 0 && !mountOutput.trimmed().isEmpty()) {
+        raidInfo->mountPoint = mountOutput.trimmed();
+    } else {
+        raidInfo->mountPoint = "";
+    }
+
+    // Отладочная информация
+    qDebug() << "Updated RAID filesystem info for" << raidInfo->devicePath
+             << "- FS:" << raidInfo->filesystem
+             << "- Mount:" << raidInfo->mountPoint;
 }
 
 // Добавить новый вспомогательный метод

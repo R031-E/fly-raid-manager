@@ -66,7 +66,7 @@ int CommandExecutor::executeAsAdminSync(const QString &command, const QStringLis
     QStringList fullArgs;
     fullArgs << command << args;
 
-    process.start("pkexec", fullArgs);
+    process.start("sudo", fullArgs);
 
     if (!process.waitForStarted()) {
         qWarning() << "Не удалось запустить команду с повышенными привелегиями:" << command;
