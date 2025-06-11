@@ -84,8 +84,8 @@ void CreateRaidArrayDialog::populateDeviceTree(const DiskStructure &diskStructur
                                partition.filesystem != tr("No filesystem");
 
             // Для RAID доступны только немонтированные партиции без файловой системы, не входящие в другие RAID
-            bool isSelectable = !isMounted && !isInRaid && !hasFilesystem;
-
+            //bool isSelectable = !isMounted && !isInRaid && !hasFilesystem;
+            bool isSelectable = !isMounted && !isInRaid;
             QString status;
             if (isMounted) {
                 status = tr("Mounted");
@@ -96,6 +96,7 @@ void CreateRaidArrayDialog::populateDeviceTree(const DiskStructure &diskStructur
             } else if (hasFilesystem) {
                 status = tr("Has filesystem");
                 partitionItem->setForeground(4, QBrush(QColor("#f39c12"))); // Оранжевый
+                hasSelectablePartitions = true;
             } else {
                 status = tr("Available");
                 partitionItem->setForeground(4, QBrush(QColor("#27ae60"))); // Зеленый

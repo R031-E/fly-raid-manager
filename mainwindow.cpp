@@ -76,6 +76,51 @@ MainWindow::MainWindow(QWidget *parent) :
                     ui->statusBar->showMessage(tr("Failed to delete RAID %1").arg(raidDevice), 5000);
                 }
             });
+    connect(m_diskManager, &DiskManager::deviceMarkedFaulty,
+            this, [this](bool success, const QString &raidDevice, const QString &memberDevice) {
+                if (success) {
+                    ui->statusBar->showMessage(tr("Device %1 marked as faulty in RAID %2")
+                                              .arg(memberDevice).arg(raidDevice), 5000);
+                    onRefreshDevices();
+                } else {
+                    ui->statusBar->showMessage(tr("Failed to mark device %1 as faulty")
+                                              .arg(memberDevice), 5000);
+                }
+            });
+    connect(m_diskManager, &DiskManager::deviceRemovedFromRaid,
+            this, [this](bool success, const QString &raidDevice, const QString &memberDevice) {
+                if (success) {
+                    ui->statusBar->showMessage(tr("Device %1 removed from RAID %2 successfully")
+                                              .arg(memberDevice).arg(raidDevice), 5000);
+                    onRefreshDevices();
+                } else {
+                    ui->statusBar->showMessage(tr("Failed to remove device %1 from RAID %2")
+                                              .arg(memberDevice).arg(raidDevice), 5000);
+                }
+            });
+    connect(m_diskManager, &DiskManager::deviceAddedToRaid,
+            this, [this](bool success, const QString &raidDevice, const QString &memberDevice) {
+                if (success) {
+                    ui->statusBar->showMessage(tr("Device %1 added to RAID %2 successfully. "
+                                                  "Rebuilding/syncing started.")
+                                              .arg(memberDevice).arg(raidDevice), 5000);
+                    onRefreshDevices();
+                } else {
+                    ui->statusBar->showMessage(tr("Failed to add device %1 to RAID %2")
+                                              .arg(memberDevice).arg(raidDevice), 5000);
+                }
+            });
+    connect(m_diskManager, &DiskManager::spareActivationCompleted,
+            this, [this](bool success, const QString &raidDevice, const QString &spareDevice) {
+                if (success) {
+                    ui->statusBar->showMessage(tr("Spare device %1 activated in RAID %2 successfully")
+                                              .arg(spareDevice).arg(raidDevice), 5000);
+                    onRefreshDevices();
+                } else {
+                    ui->statusBar->showMessage(tr("Failed to activate spare device %1 in RAID %2")
+                                              .arg(spareDevice).arg(raidDevice), 5000);
+                }
+            });
 
     // Подключаем сигналы интерфейса
     connect(ui->btnRefreshDevices, &QPushButton::clicked,
@@ -108,6 +153,8 @@ MainWindow::MainWindow(QWidget *parent) :
             this, &MainWindow::onAddToRaidClicked);
     connect(ui->btnRemoveFromRaid, &QPushButton::clicked,
             this, &MainWindow::onRemoveFromRaidClicked);
+    connect(ui->btnActivateSpare, &QPushButton::clicked,
+            this, &MainWindow::onActivateSpareClicked);
 
     // Подключаем сигнал изменения выбора в дереве для обновления кнопок
     connect(ui->treeDevices, &QTreeWidget::currentItemChanged,
@@ -132,6 +179,87 @@ void MainWindow::setupInitialInterface()
                                     << tr("Used") << tr("Free") << tr("Mount Point")
                                     << tr("Flags") << tr("Status"));
     updateButtonState();
+}
+
+void MainWindow::onActivateSpareClicked()
+{
+    // Получаем выбранный элемент
+    QTreeWidgetItem *item = ui->treeDevices->currentItem();
+    if (!item) {
+        QMessageBox::warning(this, tr("No Device Selected"),
+                            tr("Please select a spare device to activate."));
+        return;
+    }
+
+    // Проверяем, является ли выбранное устройство членом RAID
+    if (!isSelectedItemRaidMember()) {
+        QMessageBox::warning(this, tr("Invalid Selection"),
+                            tr("Please select a spare device that is a member of a RAID array."));
+        return;
+    }
+
+    QString memberDevice = getSelectedDevicePath();
+    QString raidDevice = getSelectedRaidDevice();
+
+    if (memberDevice.isEmpty() || raidDevice.isEmpty()) {
+        QMessageBox::warning(this, tr("Invalid Device"),
+                            tr("Cannot determine device or RAID array path."));
+        return;
+    }
+
+    // Проверяем, что устройство действительно spare
+    QString deviceStatus = item->text(3); // Колонка Status
+    if (!deviceStatus.contains("spare", Qt::CaseInsensitive)) {
+        QMessageBox::warning(this, tr("Not a Spare Device"),
+                            tr("Selected device %1 is not a spare device.\n\n"
+                               "Only spare devices can be activated.")
+                               .arg(memberDevice));
+        return;
+    }
+
+    // Определяем тип RAID для специального предупреждения для RAID5
+    QString raidType = item->parent()->text(2); // Тип RAID родительского элемента
+
+    // Формируем сообщение подтверждения
+    QString confirmMessage = tr("Activate spare device %1 in RAID array %2?\n\n"
+                               "This will:\n"
+                               "1) Promote the spare device to an active member\n"
+                               "2) Start automatic rebuilding/syncing process\n"
+                               "3) The RAID array will operate normally during rebuild\n\n")
+                               .arg(memberDevice)
+                               .arg(raidDevice);
+
+    // Добавляем специальное предупреждение для RAID5
+    if (raidType == "RAID5") {
+        confirmMessage += tr("<b>Important for RAID5:</b>\n"
+                           "After the rebuild is complete, you will need to manually "
+                           "expand the filesystem to use the additional space. "
+                           "The RAID array size will increase, but the filesystem "
+                           "will remain at its original size until manually resized.\n\n");
+    }
+
+    confirmMessage += tr("Do you want to continue?");
+
+    // Запрашиваем подтверждение
+    QMessageBox msgBox(this);
+    msgBox.setWindowTitle(tr("Confirm Activate Spare"));
+    msgBox.setText(confirmMessage);
+    msgBox.setIcon(QMessageBox::Question);
+    msgBox.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
+    msgBox.setDefaultButton(QMessageBox::No);
+
+    // Для RAID5 делаем текст более заметным
+    if (raidType == "RAID5") {
+        msgBox.setStyleSheet("QMessageBox { background-color: #fff3cd; }");
+    }
+
+    if (msgBox.exec() == QMessageBox::Yes) {
+        // Активируем spare устройство
+        m_diskManager->activateSpareDevice(raidDevice, memberDevice);
+
+        ui->statusBar->showMessage(tr("Activating spare device %1...")
+                                  .arg(memberDevice), 3000);
+    }
 }
 
 void MainWindow::onCreateRaidClicked()
@@ -511,15 +639,47 @@ void MainWindow::onMarkFaultyClicked()
     // Получаем выбранный элемент
     QTreeWidgetItem *item = ui->treeDevices->currentItem();
     if (!item) {
+        QMessageBox::warning(this, tr("No Device Selected"),
+                            tr("Please select a RAID member device to mark as faulty."));
         return;
     }
 
-    // В базовой версии просто показываем сообщение
-    QString devicePath = item->text(0);
-    QMessageBox::information(this, tr("Mark Faulty"),
-                           tr("Would mark device %1 as faulty").arg(devicePath));
+    // Проверяем, является ли выбранное устройство членом RAID
+    if (!isSelectedItemRaidMember()) {
+        QMessageBox::warning(this, tr("Invalid Selection"),
+                            tr("Please select a device that is a member of a RAID array."));
+        return;
+    }
 
-    // Тут в будущем будет функциональность пометки устройства как неисправного
+    if (item->parent()->text(2) == "RAID0") {
+        QMessageBox::warning(this, tr("Invalid Selection"),
+                            tr("Cannot mark faulty a RAID0 member."));
+        return;
+    }
+
+    QString memberDevice = getSelectedDevicePath();
+    QString raidDevice = getSelectedRaidDevice();
+
+    if (memberDevice.isEmpty() || raidDevice.isEmpty()) {
+        QMessageBox::warning(this, tr("Invalid Device"),
+                            tr("Cannot determine device or RAID array path."));
+        return;
+    }
+
+    // Запрашиваем подтверждение
+    QMessageBox::StandardButton reply;
+    reply = QMessageBox::question(this, tr("Confirm Mark Faulty"),
+                                 tr("Mark device %1 as faulty in RAID array %2?\n\n"
+                                    "This will cause the RAID array to operate in degraded mode "
+                                    "and the device will be excluded from the array.\n\n")
+                                     .arg(memberDevice)
+                                     .arg(raidDevice),
+                                 QMessageBox::Yes | QMessageBox::No);
+
+    if (reply == QMessageBox::Yes) {
+        // Помечаем устройство как сбойное
+        m_diskManager->markDeviceAsFaulty(raidDevice, memberDevice);
+    }
 }
 
 void MainWindow::onAddToRaidClicked()
@@ -527,15 +687,103 @@ void MainWindow::onAddToRaidClicked()
     // Получаем выбранный элемент
     QTreeWidgetItem *item = ui->treeDevices->currentItem();
     if (!item) {
+        QMessageBox::warning(this, tr("No Device Selected"),
+                            tr("Please select a partition or disk to add to a RAID array."));
         return;
     }
 
-    // В базовой версии просто показываем сообщение
-    QString devicePath = item->text(0);
-    QMessageBox::information(this, tr("Add to RAID"),
-                           tr("Would add device %1 to RAID").arg(devicePath));
+    QString devicePath = getSelectedDevicePath();
+    if (devicePath.isEmpty()) {
+        QMessageBox::warning(this, tr("Invalid Device"),
+                            tr("Cannot determine device path."));
+        return;
+    }
 
-    // Тут в будущем будет функциональность добавления устройства в RAID
+    bool isDisk = (devicePath.contains("/dev/sd") || devicePath.contains("/dev/nvme") ||
+                   devicePath.contains("/dev/vd") || devicePath.contains("/dev/hd")) &&
+                  item->parent() == nullptr;
+
+    // Проверяем, можно ли добавить выбранное устройство в RAID
+    if (!isSelectedItemPartition() && !isDisk) {
+        QMessageBox::warning(this, tr("Invalid Selection"),
+                            tr("Please select a partition or unpartitioned disk."));
+        return;
+    }
+
+    // Проверяем, что устройство не смонтировано и не в RAID
+    if (m_diskManager->isDeviceMounted(devicePath)) {
+        QMessageBox::warning(this, tr("Device Mounted"),
+                            tr("Device %1 is currently mounted. Please unmount it first.")
+                               .arg(devicePath));
+        return;
+    }
+
+    const DiskStructure& diskStructure = m_diskManager->getDiskStructure();
+    // Для разделов проверяем, не является ли он членом RAID
+    if (isSelectedItemPartition()) {
+        for (const DiskInfo &disk : diskStructure.getDisks()) {
+            for (const PartitionInfo &partition : disk.partitions) {
+                if (partition.devicePath == devicePath && partition.isRaidMember) {
+                    QMessageBox::warning(this, tr("Already in RAID"),
+                                        tr("Device %1 is already a member of a RAID array.")
+                                           .arg(devicePath));
+                    return;
+                }
+            }
+        }
+    }
+
+    // Получаем список доступных RAID массивов
+    QStringList availableRaids;
+
+    for (const RaidInfo &raid : diskStructure.getRaids()) {
+        // Добавляем только активные RAID массивы
+        if ((raid.state.contains("active", Qt::CaseInsensitive) || raid.state.contains("clean", Qt::CaseInsensitive)) && raid.type != RaidType::RAID0) {
+            QString raidInfo = tr("%1 (%2, %3)")
+                              .arg(raid.devicePath)
+                              .arg(DiskUtils::raidTypeToString(raid.type))
+                              .arg(raid.size);
+            availableRaids.append(raidInfo);
+        }
+    }
+
+    if (availableRaids.isEmpty()) {
+        QMessageBox::information(this, tr("No RAID Arrays"),
+                                tr("No active RAID arrays available to add devices to."));
+        return;
+    }
+
+    // Показываем диалог выбора RAID массива
+    bool ok;
+    QString selectedRaidInfo = QInputDialog::getItem(this, tr("Select RAID Array"),
+                                                    tr("Select RAID array to add device %1 to:")
+                                                       .arg(devicePath),
+                                                    availableRaids, 0, false, &ok);
+
+    if (!ok || selectedRaidInfo.isEmpty()) {
+        return;
+    }
+
+    // Извлекаем путь к RAID устройству из выбранной строки
+    QString raidDevice = selectedRaidInfo.split(' ').first();
+
+    // Запрашиваем финальное подтверждение
+    QMessageBox::StandardButton reply;
+    reply = QMessageBox::question(this, tr("Confirm Add Device"),
+                                 tr("Add device %1 to RAID array %2?\n\n"
+                                    "This will:\n"
+                                    "1) Wipe all data from %1\n"
+                                    "2) Add it as a member of the RAID array\n"
+                                    "3) Start automatic rebuilding/syncing process\n\n"
+                                    "All data on %1 will be permanently lost!")
+                                     .arg(devicePath)
+                                     .arg(raidDevice),
+                                 QMessageBox::Yes | QMessageBox::No);
+
+    if (reply == QMessageBox::Yes) {
+        // Добавляем устройство в RAID
+        m_diskManager->addDeviceToRaid(raidDevice, devicePath);
+    }
 }
 
 void MainWindow::onRemoveFromRaidClicked()
@@ -543,15 +791,50 @@ void MainWindow::onRemoveFromRaidClicked()
     // Получаем выбранный элемент
     QTreeWidgetItem *item = ui->treeDevices->currentItem();
     if (!item) {
+        QMessageBox::warning(this, tr("No Device Selected"),
+                            tr("Please select a RAID member device to remove from the array."));
         return;
     }
 
-    // В базовой версии просто показываем сообщение
-    QString devicePath = item->text(0);
-    QMessageBox::information(this, tr("Remove from RAID"),
-                           tr("Would remove device %1 from RAID").arg(devicePath));
+    // Проверяем, является ли выбранное устройство членом RAID
+    if (!isSelectedItemRaidMember()) {
+        QMessageBox::warning(this, tr("Invalid Selection"),
+                            tr("Please select a device that is a member of a RAID array."));
+        return;
+    }
 
-    // Тут в будущем будет функциональность удаления устройства из RAID
+    if (item->parent()->text(2) == "RAID0") {
+        QMessageBox::warning(this, tr("Invalid Selection"),
+                            tr("Cannot remove a RAID0 member."));
+        return;
+    }
+
+    QString memberDevice = getSelectedDevicePath();
+    QString raidDevice = getSelectedRaidDevice();
+
+    if (memberDevice.isEmpty() || raidDevice.isEmpty()) {
+        QMessageBox::warning(this, tr("Invalid Device"),
+                            tr("Cannot determine device or RAID array path."));
+        return;
+    }
+
+    // Запрашиваем подтверждение
+    QMessageBox::StandardButton reply;
+    reply = QMessageBox::question(this, tr("Confirm Remove Device"),
+                                 tr("Remove device %1 from RAID array %2?\n\n"
+                                    "This will:\n"
+                                    "1) Remove it from the RAID array\n"
+                                    "2) The device will become available for other uses\n\n"
+                                    "The RAID array will continue operating in degraded mode "
+                                    "until a replacement device is added.")
+                                     .arg(memberDevice)
+                                     .arg(raidDevice),
+                                 QMessageBox::Yes | QMessageBox::No);
+
+    if (reply == QMessageBox::Yes) {
+        // Удаляем устройство из RAID
+        m_diskManager->removeDeviceFromRaid(raidDevice, memberDevice);
+    }
 }
 
 void MainWindow::onCreatePartitionTableClicked()
@@ -972,22 +1255,45 @@ bool MainWindow::isSelectedItemRaidMember() const
         return false;
     }
 
-    // Если элемент имеет родителя (это раздел), проверяем его статус напрямую
-    if (item->parent() != nullptr) {
-        QString statusText = item->text(2); // Колонка Status
-        return statusText.contains("member", Qt::CaseInsensitive);
+    QTreeWidgetItem *parent = item->parent();
+    if (!parent) {
+        return false;
     }
 
+    QString parentPath = parent->text(0);
+    QString childFsText = item->text(7);
+    if (parentPath.contains("/dev/md") || childFsText.contains("member", Qt::CaseInsensitive)) {
+        return true;
+    }
+    return false;
+
     // Если элемент родитель (диск), проверяем всех его детей
-    for (int i = 0; i < item->childCount(); ++i) {
+   /* for (int i = 0; i < item->childCount(); ++i) {
         QTreeWidgetItem *child = item->child(i);
         QString childStatusText = child->text(2); // Колонка Status
         if (childStatusText.contains("member", Qt::CaseInsensitive)) {
             return true; // Хотя бы один дочерний элемент является членом RAID
         }
+    }*/
+}
+
+QString MainWindow::getSelectedRaidDevice() const
+{
+    QTreeWidgetItem *item = ui->treeDevices->currentItem();
+    if (!item) {
+        return QString();
     }
 
-    return false;
+    // Если выбрано устройство-член RAID, получаем путь к родительскому RAID
+    QTreeWidgetItem *parent = item->parent();
+    if (parent) {
+        QString parentPath = parent->text(0);
+        if (parentPath.contains("/dev/md")) {
+            return parentPath;
+        }
+    }
+
+    return QString();
 }
 
 void MainWindow::updateButtonState()
@@ -999,6 +1305,7 @@ void MainWindow::updateButtonState()
     ui->btnMarkFaulty->setEnabled(false);
     ui->btnAddToRaid->setEnabled(false);
     ui->btnRemoveFromRaid->setEnabled(false);
+    ui->btnActivateSpare->setEnabled(false);
 
     // Обновляем доступность действий в меню
     ui->actionDeletePartition->setEnabled(false);
@@ -1007,7 +1314,6 @@ void MainWindow::updateButtonState()
     ui->actionCreatePartitionTable->setEnabled(false);
     ui->actionMountPartition->setEnabled(false);
     ui->actionUnmountPartition->setEnabled(false);
-    ui->actionDestroyRaid->setEnabled(false);
 
     if (!item || !m_diskManager) {
         return;
@@ -1022,17 +1328,15 @@ void MainWindow::updateButtonState()
                   item->parent() == nullptr;
     bool isPartition = isSelectedItemPartition();
     bool isRaid = isSelectedItemRaid();
-    bool isRaidMember = item->parent() && item->parent()->text(0).contains("md");
-    bool isPartitionRaidMember = isSelectedItemRaidMember();
+    bool isRaidMember = isSelectedItemRaidMember(); // Используем новый метод
 
-    // ОТЛАДОЧНАЯ ИНФОРМАЦИЯ - можно удалить после исправления
+    // ОТЛАДОЧНАЯ ИНФОРМАЦИЯ
     qDebug() << "=== DEBUG updateButtonState ===";
     qDebug() << "Device path:" << devicePath;
     qDebug() << "isDisk:" << isDisk;
     qDebug() << "isPartition:" << isPartition;
     qDebug() << "isRaid:" << isRaid;
     qDebug() << "isRaidMember:" << isRaidMember;
-    qDebug() << "isPartitionRaidMember:" << isPartitionRaidMember;
 
     // Активируем действия для дисков
     if (isDisk) {
@@ -1046,18 +1350,18 @@ void MainWindow::updateButtonState()
         bool isMounted = !mountPoint.isEmpty();
 
         // Запрещаем операции для партиций, входящих в RAID
-        if (!isPartitionRaidMember) {
+        if (!isRaidMember) {
             ui->actionDeletePartition->setEnabled(!isMounted);
             ui->actionFormatPartition->setEnabled(!isMounted);
         }
     }
 
-
+    // Форматирование доступно для RAID массивов (но не их членов)
     if (isRaid && !isRaidMember) {
         ui->actionFormatPartition->setEnabled(true);
     }
 
-    // Получаем информацию о монтировании и файловой системе
+    // Логика монтирования (существующая)
     bool isMounted = m_diskManager->isDeviceMounted(devicePath);
     QString filesystem = m_diskManager->getDeviceFilesystem(devicePath);
     bool hasFilesystem = !filesystem.isEmpty() &&
@@ -1065,60 +1369,82 @@ void MainWindow::updateButtonState()
                         filesystem != "-" &&
                         !filesystem.isNull();
 
-    // ОТЛАДОЧНАЯ ИНФОРМАЦИЯ для файловой системы
-    qDebug() << "isMounted:" << isMounted;
-    qDebug() << "filesystem:" << filesystem;
-    qDebug() << "hasFilesystem:" << hasFilesystem;
-
-    // Проверяем файловую систему также из UI (колонка 2)
     QString uiFilesystem = item->text(2);
     bool hasUiFilesystem = !uiFilesystem.isEmpty() &&
                           uiFilesystem != "-" &&
                           uiFilesystem != "unknown" &&
                           !uiFilesystem.isNull();
 
-    qDebug() << "UI filesystem:" << uiFilesystem;
-    qDebug() << "hasUiFilesystem:" << hasUiFilesystem;
-
-    // Используем файловую систему из UI, если основная проверка не работает
     if (!hasFilesystem && hasUiFilesystem) {
         hasFilesystem = hasUiFilesystem;
-        qDebug() << "Using UI filesystem info";
     }
 
-    // Логика монтирования
     if (m_showAllDevices) {
-        // В режиме "Все устройства"
-        if (isPartition && !isPartitionRaidMember) {
-            // Для обычных разделов (не членов RAID)
+        if (isPartition && !isRaidMember) {
             ui->actionMountPartition->setEnabled(!isMounted && hasFilesystem);
             ui->actionUnmountPartition->setEnabled(isMounted);
-            qDebug() << "Partition mount enabled:" << (!isMounted && hasFilesystem);
         } else if (isRaid && !isRaidMember) {
-            // Для RAID массивов (не их членов)
             ui->actionMountPartition->setEnabled(!isMounted && hasFilesystem);
             ui->actionUnmountPartition->setEnabled(isMounted);
-            qDebug() << "RAID mount enabled:" << (!isMounted && hasFilesystem);
         }
     } else {
-        // В режиме "Только RAID" - только для RAID массивов верхнего уровня
         if (isRaid && !isRaidMember) {
             ui->actionMountPartition->setEnabled(!isMounted && hasFilesystem);
             ui->actionUnmountPartition->setEnabled(isMounted);
-            qDebug() << "RAID-only mode mount enabled:" << (!isMounted && hasFilesystem);
         }
     }
 
-    qDebug() << "Final mount action enabled:" << ui->actionMountPartition->isEnabled();
-    qDebug() << "===============================";
-
-    ui->actionDestroyRaid->setEnabled(isRaid);
-    // Кнопка "Пометить как неисправное" доступна только для устройств в RAID
-    ui->btnMarkFaulty->setEnabled(isRaidMember);
-
+    // Кнопка "Пометить как неисправное" доступна только для членов RAID
+    ui->btnMarkFaulty->setEnabled(isRaidMember && item->parent()->text(2) != "RAID0");
     // Кнопка "Добавить в RAID" доступна только для разделов, не входящих в RAID
-    ui->btnAddToRaid->setEnabled(isPartition && !isRaidMember && !isPartitionRaidMember);
+    ui->btnAddToRaid->setEnabled(isPartition && !isRaidMember);
 
     // Кнопка "Удалить из RAID" доступна только для устройств в RAID
-    ui->btnRemoveFromRaid->setEnabled(isRaidMember);
+    ui->btnRemoveFromRaid->setEnabled(isRaidMember && item->parent()->text(2) != "RAID0");
+
+    // Обновляем доступность действия удаления RAID
+    bool isRaidArray = isSelectedItemRaid();
+    ui->actionDestroyRaid->setEnabled(isRaidArray);
+
+    if (isRaidMember) {
+        // Проверяем статус устройства в RAID
+        QString deviceStatus = item->text(3); // Колонка Status
+        bool isFaulty = deviceStatus.contains("faulty", Qt::CaseInsensitive);
+
+        // Разрешаем удаление только для неактивных членов RAID
+        ui->btnRemoveFromRaid->setEnabled(isFaulty);
+
+        if (!isFaulty) {
+            ui->btnRemoveFromRaid->setToolTip(tr("Cannot working device. First mark it as faulty."));
+        } else {
+            ui->btnRemoveFromRaid->setToolTip(tr("Remove device from RAID array"));
+        }
+    } else {
+        ui->btnRemoveFromRaid->setEnabled(false);
+        ui->btnRemoveFromRaid->setToolTip(tr("Select a RAID member device to remove"));
+    }
+
+    bool canAddToRaid = false;
+
+    if (isPartition && !isRaidMember && !isMounted) {
+        canAddToRaid = true;
+    } else if (isDisk && !isRaidMember && !isMounted) {
+        canAddToRaid = (item->childCount() == 0);
+    }
+
+    ui->btnAddToRaid->setEnabled(canAddToRaid);
+
+    ui->btnActivateSpare->setEnabled(item->text(3).contains("spare", Qt::CaseInsensitive));
+
+    if (canAddToRaid) {
+        ui->btnAddToRaid->setToolTip(tr("Add device to existing RAID array"));
+    } else if (isMounted) {
+        ui->btnAddToRaid->setToolTip(tr("Cannot add mounted device to RAID"));
+    } else if (isRaidMember) {
+        ui->btnAddToRaid->setToolTip(tr("Device is already in RAID"));
+    } else {
+        ui->btnAddToRaid->setToolTip(tr("Select an available partition or unpartitioned disk"));
+    }
+
+    qDebug() << "===============================";
 }

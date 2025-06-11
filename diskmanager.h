@@ -35,6 +35,10 @@ public:
     void createRaidArray(RaidType raidType, const QStringList &devices, const QString &arrayName = QString());
     void deleteRaidArray(const QString &raidDevice, const QStringList &memberDevices);
     void wipeDevice(const QString &devicePath);
+    void markDeviceAsFaulty(const QString &raidDevice, const QString &memberDevice);
+    void removeDeviceFromRaid(const QString &raidDevice, const QString &memberDevice);
+    void addDeviceToRaid(const QString &raidDevice, const QString &memberDevice);
+    void activateSpareDevice(const QString &raidDevice, const QString &spareDevice);
 
 signals:
     void devicesRefreshed(bool success);
@@ -57,6 +61,11 @@ signals:
     void raidStopCompleted(bool success, const QString &raidDevice);
     void superblockCleanProgress(const QString &device, bool success);
     void raidDeletionCompleted(bool success, const QString &raidDevice);
+    void deviceMarkedFaulty(bool success, const QString &raidDevice, const QString &memberDevice);
+    void deviceRemovedFromRaid(bool success, const QString &raidDevice, const QString &memberDevice);
+    void deviceAddedToRaid(bool success, const QString &raidDevice, const QString &memberDevice);
+
+    void spareActivationCompleted(bool success, const QString &raidDevice, const QString &spareDevice);
 
 private slots:
     void handleCommandFinished(int exitCode, QProcess::ExitStatus exitStatus);
@@ -81,7 +90,11 @@ private:
         CREATE_RAID_ARRAY,
         STOP_RAID_ARRAY,
         CLEAN_SUPERBLOCK,
-        DELETE_RAID_ARRAY
+        DELETE_RAID_ARRAY,
+        MARK_FAULTY_DEVICE,
+        REMOVE_FROM_RAID_ARRAY,
+        ADD_TO_RAID_ARRAY,
+        ACTIVATE_SPARE_DEVICE
     };
 
     enum class WipeContext {
@@ -96,7 +109,7 @@ private:
     QStringList m_raidDetailsToCheck; // Список путей к RAID-массивам для детального анализа
     bool m_hasDevicePartitionsLine;
 
-    // Переменные для операций монтирования
+    // Переменные для операций
     QString m_currentMountDevice;
     QString m_currentMountPoint;
 
@@ -107,17 +120,30 @@ private:
     QString m_currentWipeDevice;
     QString m_createdRaidDevice;
 
+    QString m_currentFaultyRaidDevice;
+    QString m_currentFaultyMemberDevice;
+
+    QString m_currentRemoveRaidDevice;
+    QString m_currentRemoveMemberDevice;
+
+    QString m_currentAddRaidDevice;
+    QString m_currentAddMemberDevice;
+
     QStringList m_devicesToCleanSuperblock;
     QStringList m_cleanedSuperblockDevices;
     QString m_raidToDelete;
     QString m_currentSuperblockDevice;
 
-    void parseMdadmScanOutput(const QString &output);
-    void parseMdadmDetailOutput(const QString &output);
+    QString m_currentActivateRaidDevice;
+    QString m_currentActivateSpareDevice;
+
     CommandExecutor *m_commandExecutor; // Исполнитель команд
     DiskStructure m_diskStructure;      // Структура дисков
+
     void parseLsblkOutput(const QString &output);
     void parseDfOutput(const QString &output);
+    void parseMdadmScanOutput(const QString &output);
+    void parseMdadmDetailOutput(const QString &output);
     qint64 sizeStringToBytes(const QString &sizeStr);
     void parsePartitionFromJson(const QJsonObject &partObj, DiskInfo &disk);
     void markPartitionAsRaidMember(const QString &devicePath);
@@ -143,6 +169,10 @@ private:
     void updateRaidFilesystemInfo(RaidInfo *raidInfo);
     void stopRaidArray();
     void processNextSuperblockClean();
+
+    bool expandRaid1Array(const QString &raidDevice, const QString &spareDevice);
+    bool expandRaid5Array(const QString &raidDevice, const QString &spareDevice);
+    QString detectFilesystem(const QString &devicePath);
 
 };
 

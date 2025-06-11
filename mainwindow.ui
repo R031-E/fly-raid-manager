@@ -214,7 +214,7 @@
              <string>Add device to existing RAID array</string>
             </property>
             <property name="text">
-             <string>Add to RAID</string>
+             <string>Add device to RAID</string>
             </property>
             <property name="icon">
              <iconset theme="list-add">
@@ -232,6 +232,20 @@
             </property>
             <property name="icon">
              <iconset theme="list-remove">
+              <normaloff>.</normaloff>.</iconset>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QPushButton" name="btnActivateSpare">
+            <property name="toolTip">
+             <string>Activate spare device as active member</string>
+            </property>
+            <property name="text">
+             <string>Activate Spare</string>
+            </property>
+            <property name="icon">
+             <iconset theme="media-playback-start">
               <normaloff>.</normaloff>.</iconset>
             </property>
            </widget>

@@ -3,6 +3,7 @@
 
 #include <QMainWindow>
 #include <QTreeWidgetItem>
+#include <QInputDialog>
 #include "diskmanager.h"
 #include "partitiontabledialog.h"
 #include "createpartitiondialog.h"
@@ -41,6 +42,7 @@ private slots:
     void onMarkFaultyClicked();
     void onAddToRaidClicked();
     void onRemoveFromRaidClicked();
+    void onActivateSpareClicked();
 
     // Слоты для операций с разделами
     void onCreatePartitionTableClicked();
@@ -98,6 +100,7 @@ private:
     // Получение пути к выбранному устройству
     QString getSelectedDevicePath() const;
     QString getSelectedPartitionPath() const;
+    QString getSelectedRaidDevice() const;
 };
 
 #endif // MAINWINDOW_H

@@ -797,9 +797,69 @@ void DiskManager::handleCommandOutput(const QString &output)
     }
 }
 
+void DiskManager::markDeviceAsFaulty(const QString &raidDevice, const QString &memberDevice)
+{
+    m_currentFaultyRaidDevice = raidDevice;
+    m_currentFaultyMemberDevice = memberDevice;
+
+    QStringList args;
+    args << "--manage" << raidDevice << "--set-faulty" << memberDevice;
+
+    m_currentCommand = CommandType::MARK_FAULTY_DEVICE;
+
+    emit commandOutput(tr("Marking device %1 as faulty in RAID %2...")
+                      .arg(memberDevice).arg(raidDevice));
+
+    QString output, errorOutput;
+    int exitCode = m_commandExecutor->executeAsAdminSync("mdadm", args, output, errorOutput);
+    bool success = (exitCode == 0);
+
+    if (success) {
+        emit commandOutput(tr("Device %1 marked as faulty in RAID %2")
+                          .arg(memberDevice).arg(raidDevice));
+        emit m_commandExecutor->finished(0, QProcess::NormalExit);
+    } else {
+        emit commandOutput(tr("Failed to mark device %1 as faulty: %2")
+                          .arg(memberDevice).arg(errorOutput));
+        emit m_commandExecutor->finished(1, QProcess::CrashExit);
+    }
+}
+
+void DiskManager::removeDeviceFromRaid(const QString &raidDevice, const QString &memberDevice)
+{
+    m_currentRemoveRaidDevice = raidDevice;
+    m_currentRemoveMemberDevice = memberDevice;
+
+    // Сначала помечаем устройство как faulty, затем удаляем
+    // Используем команду которая делает оба действия сразу
+    QStringList args;
+    args << raidDevice << "--remove" << memberDevice;
+
+    m_currentCommand = CommandType::REMOVE_FROM_RAID_ARRAY;
+
+    emit commandOutput(tr("Removing device %1 from RAID %2...")
+                      .arg(memberDevice).arg(raidDevice));
+
+    // Выполняем синхронно
+    QString output, errorOutput;
+    int exitCode = m_commandExecutor->executeAsAdminSync("mdadm", args, output, errorOutput);
+
+    bool success = (exitCode == 0);
+
+    if (success) {
+        emit commandOutput(tr("✓ Device %1 successfully removed from RAID %2")
+                          .arg(memberDevice).arg(raidDevice));
+    } else {
+        emit commandOutput(tr("✗ Failed to remove device %1 from RAID %2: %3")
+                          .arg(memberDevice).arg(raidDevice).arg(errorOutput));
+    }
+
+    // Эмитим сигнал завершения для обработки в handleCommandFinished
+    emit m_commandExecutor->finished(exitCode, exitCode == 0 ? QProcess::NormalExit : QProcess::CrashExit);
+}
+
 void DiskManager::handleCommandErrorOutput(const QString &error)
 {
-    // Просто передаем ошибку для отображения
     emit commandOutput(tr("ERROR: %1").arg(error));
 }
 
@@ -961,15 +1021,7 @@ void DiskManager::handleCommandFinished(int exitCode, QProcess::ExitStatus exitS
         break;
 
     case CommandType::CLEAN_SUPERBLOCK:
-        emit superblockCleanProgress(m_currentSuperblockDevice,
-                                    exitCode == 0 && exitStatus == QProcess::NormalExit);
-        /*if (exitCode == 0 && exitStatus == QProcess::NormalExit) {
-            emit commandOutput(tr("Superblock cleared from %1").arg(m_currentSuperblockDevice));
-            m_cleanedSuperblockDevices.append(m_currentSuperblockDevice);
-        } else {
-            emit commandOutput(tr("Failed to clear superblock from %1").arg(m_currentSuperblockDevice));
-        }*/
-
+        emit superblockCleanProgress(m_currentSuperblockDevice, exitCode == 0 && exitStatus == QProcess::NormalExit);
         if (m_devicesToCleanSuperblock.isEmpty()) {
             // Все суперблоки очищены, начинаем wipefs
             processNextWipeOperation();
@@ -983,21 +1035,6 @@ void DiskManager::handleCommandFinished(int exitCode, QProcess::ExitStatus exitS
 
     case CommandType::WIPE_DEVICE:
         emit deviceWipeCompleted(m_currentWipeDevice, exitCode == 0 && exitStatus == QProcess::NormalExit);
-
-        /*if (exitCode != 0 || exitStatus != QProcess::NormalExit) {
-            // При ошибке wipefs прерываем операцию
-            if (m_currentWipeContext == WipeContext::RAID_CREATION) {
-                emit commandOutput(tr("Failed to wipe device %1, aborting RAID creation").arg(m_currentWipeDevice));
-                emit raidCreationCompleted(false, QString());
-            } else if (m_currentWipeContext == WipeContext::RAID_DELETION) {
-                emit commandOutput(tr("Failed to wipe device %1, RAID deletion may be incomplete").arg(m_currentWipeDevice));
-                emit raidDeletionCompleted(false, m_raidToDelete);
-                m_isDeletingRaid = false;
-                m_raidToDelete.clear();
-            }
-            return;
-        }*/
-
         if (m_devicesToWipe.isEmpty()) {
             // Все устройства обработаны, переходим к следующему этапу
             if (m_currentWipeContext == WipeContext::RAID_CREATION) {
@@ -1047,10 +1084,117 @@ void DiskManager::handleCommandFinished(int exitCode, QProcess::ExitStatus exitS
         refreshDevices();
         break;
 
+    case CommandType::MARK_FAULTY_DEVICE:
+        emit deviceMarkedFaulty(exitCode == 0 && exitStatus == QProcess::NormalExit,
+                               m_currentFaultyRaidDevice, m_currentFaultyMemberDevice);
+
+        if (exitCode == 0 && exitStatus == QProcess::NormalExit) {
+            emit commandOutput(tr("Device %1 successfully marked as faulty in RAID %2")
+                              .arg(m_currentFaultyMemberDevice).arg(m_currentFaultyRaidDevice));
+        } else {
+            emit commandOutput(tr("Failed to mark device %1 as faulty in RAID %2")
+                              .arg(m_currentFaultyMemberDevice).arg(m_currentFaultyRaidDevice));
+        }
+        refreshDevices();
+        break;
+
+    case CommandType::REMOVE_FROM_RAID_ARRAY:
+        emit deviceRemovedFromRaid(exitCode == 0 && exitStatus == QProcess::NormalExit,
+                                  m_currentRemoveRaidDevice, m_currentRemoveMemberDevice);
+
+        if (exitCode == 0 && exitStatus == QProcess::NormalExit) {
+            emit commandOutput(tr("Device %1 successfully removed from RAID %2")
+                              .arg(m_currentRemoveMemberDevice).arg(m_currentRemoveRaidDevice));
+        } else {
+            emit commandOutput(tr("Failed to remove device %1 from RAID %2")
+                              .arg(m_currentRemoveMemberDevice).arg(m_currentRemoveRaidDevice));
+        }
+        refreshDevices();
+        break;
+
+    case CommandType::ADD_TO_RAID_ARRAY:
+        emit deviceAddedToRaid(exitCode == 0 && exitStatus == QProcess::NormalExit,
+                              m_currentAddRaidDevice, m_currentAddMemberDevice);
+
+        if (exitCode == 0 && exitStatus == QProcess::NormalExit) {
+            emit commandOutput(tr("Device %1 successfully added to RAID %2. "
+                                 "Array will rebuild/sync automatically.")
+                              .arg(m_currentAddMemberDevice).arg(m_currentAddRaidDevice));
+        } else {
+            emit commandOutput(tr("Failed to add device %1 to RAID %2")
+                              .arg(m_currentAddMemberDevice).arg(m_currentAddRaidDevice));
+        }
+        refreshDevices();
+        break;
+
+    case CommandType::ACTIVATE_SPARE_DEVICE:
+        if (exitCode == 0 && exitStatus == QProcess::NormalExit) {
+            emit commandOutput(tr("Started promoting member %1")
+                                  .arg(m_currentActivateSpareDevice));
+            emit spareActivationCompleted(true, m_currentActivateRaidDevice, m_currentActivateSpareDevice);
+        } else {
+            emit commandOutput(tr("Couldn't start promoting member %1")
+                                  .arg(m_currentActivateSpareDevice));
+            spareActivationCompleted(false, m_currentActivateRaidDevice, m_currentActivateSpareDevice);
+        }
+        refreshDevices();
+        break;
+
     default:
         emit devicesRefreshed(true);
         break;
     }
+}
+
+void DiskManager::addDeviceToRaid(const QString &raidDevice, const QString &memberDevice)
+{
+    m_currentAddRaidDevice = raidDevice;
+    m_currentAddMemberDevice = memberDevice;
+
+    m_currentCommand = CommandType::ADD_TO_RAID_ARRAY;
+
+    emit commandOutput(tr("Adding device %1 to RAID %2...")
+                      .arg(memberDevice).arg(raidDevice));
+
+    // Шаг 1: Очищаем суперблок с устройства
+    emit commandOutput(tr("Cleaning superblock from %1...").arg(memberDevice));
+
+    QStringList cleanArgs;
+    cleanArgs << "--zero-superblock" << memberDevice;
+
+    QString cleanOutput, cleanErrorOutput;
+    int cleanExitCode = m_commandExecutor->executeAsAdminSync("mdadm", cleanArgs, cleanOutput, cleanErrorOutput);
+
+    if (cleanExitCode != 0) {
+        emit commandOutput(tr("Failed to wipe device %1: %2")
+                          .arg(memberDevice).arg(cleanErrorOutput));
+        emit m_commandExecutor->finished(cleanExitCode, QProcess::CrashExit);
+        return;
+    }
+
+    emit commandOutput(tr("Device %1 wiped successfully").arg(memberDevice));
+
+    emit commandOutput(tr("Step 2: Adding device to RAID array..."));
+
+    QStringList addArgs;
+    addArgs << raidDevice << "--add" << memberDevice;
+
+    QString addOutput, addErrorOutput;
+    int addExitCode = m_commandExecutor->executeAsAdminSync("mdadm", addArgs, addOutput, addErrorOutput);
+
+    bool success = (addExitCode == 0);
+
+    if (success) {
+        emit commandOutput(tr("Device %1 successfully added to RAID %2")
+                          .arg(memberDevice).arg(raidDevice));
+        emit commandOutput(tr("RAID array will begin rebuilding/syncing automatically"));
+    } else {
+        emit commandOutput(tr("Failed to add device %1 to RAID %2: %3")
+                          .arg(memberDevice).arg(raidDevice).arg(addErrorOutput));
+    }
+
+    // Эмитим сигнал завершения для обработки в handleCommandFinished
+    emit m_commandExecutor->finished(addExitCode, addExitCode == 0 ? QProcess::NormalExit : QProcess::CrashExit);
 }
 
 void DiskManager::createPartitionTable(const QString &devicePath, const QString &tableType)
@@ -1442,9 +1586,37 @@ void DiskManager::parseMdadmDetailOutput(const QString &output)
         else if (trimmedLine.contains("State :")) {
             QStringList parts = trimmedLine.split(':', Qt::SkipEmptyParts);
             if (parts.size() >= 2) {
-                targetRaid->state = parts[1].trimmed();
+                QString stateStr = parts[1].trimmed();
+                targetRaid->state = stateStr;
+
+                // Отладочная информация
+                qDebug() << "RAID" << targetRaid->devicePath << "state parsed:" << stateStr;
+                emit commandOutput(tr("RAID %1 state: %2").arg(targetRaid->devicePath).arg(stateStr));
             }
         }
+
+        else if (trimmedLine.contains("Rebuild Status :") || trimmedLine.contains("Resync Status :")) {
+            QStringList parts = trimmedLine.split(':', Qt::SkipEmptyParts);
+            if (parts.size() >= 2) {
+                QString statusStr = parts[1].trimmed();
+                // Извлекаем процент из строки типа "47% complete"
+                QRegularExpression percentRegex("(\\d+)%");
+                QRegularExpressionMatch match = percentRegex.match(statusStr);
+                if (match.hasMatch()) {
+                    targetRaid->syncPercent = match.captured(1).toInt();
+
+                    // Обновляем состояние чтобы показать процесс синхронизации
+                    if (trimmedLine.contains("Rebuild")) {
+                        targetRaid->state += tr(" (rebuilding %1%)").arg(targetRaid->syncPercent);
+                    } else {
+                        targetRaid->state += tr(" (syncing %1%)").arg(targetRaid->syncPercent);
+                    }
+
+                    qDebug() << "RAID" << targetRaid->devicePath << "sync percent:" << targetRaid->syncPercent;
+                }
+            }
+        }
+
         // Ищем размер массива
         else if (trimmedLine.contains("Array Size :")) {
             QStringList parts = trimmedLine.split(':', Qt::SkipEmptyParts);
@@ -1544,7 +1716,6 @@ void DiskManager::updateRaidFilesystemInfo(RaidInfo *raidInfo)
              << "- Mount:" << raidInfo->mountPoint;
 }
 
-// Добавить новый вспомогательный метод
 void DiskManager::markPartitionAsRaidMember(const QString &devicePath)
 {
     // Проходим по всем дискам и их разделам
@@ -1557,6 +1728,41 @@ void DiskManager::markPartitionAsRaidMember(const QString &devicePath)
             }
         }
     }
+}
+
+void DiskManager::activateSpareDevice(const QString &raidDevice, const QString &spareDevice)
+{
+    m_currentActivateRaidDevice = raidDevice;
+    m_currentActivateSpareDevice = spareDevice;
+    int currentMembers = 0;
+
+    for (const RaidInfo &raid : m_diskStructure.getRaids()) {
+        if (raid.devicePath == raidDevice) {
+            currentMembers = raid.members.size();
+        }
+    }
+    int newMembers = currentMembers + 1;
+
+    QStringList args;
+    args << "--grow" << raidDevice << "--raid-devices=" + QString::number(currentMembers);
+
+    m_currentCommand = CommandType::ACTIVATE_SPARE_DEVICE;
+
+    if (!m_commandExecutor->executeAsAdmin("mdadm", args)) {
+        qDebug() << "Failed to run parted command for getting free space info";
+    }
+}
+
+
+QString DiskManager::detectFilesystem(const QString &devicePath)
+{
+    QString fs = "";
+    for (const RaidInfo &raid : m_diskStructure.getRaids()) {
+        if (raid.devicePath == devicePath) {
+            fs = raid.filesystem;
+        }
+    }
+    return fs;
 }
 
 void DiskManager::parseDfOutput(const QString &output)
