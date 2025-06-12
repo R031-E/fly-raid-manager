@@ -4,6 +4,8 @@ TARGET = fly-admin-raid-manager
 QT       += core gui
 QT += widgets
 
+CONFIG += fly
+
 LIBS += -lflyintegration -lflyqtconfig -lflycore -lflyuiaux -lflyuiextra -lflypty -lflysu -lflyfiledialog
 INCLUDEPATH += /usr/include/fly
 
@@ -42,7 +44,3 @@ TRANSLATIONS += \
 CONFIG += lrelease
 CONFIG += embed_translations
 
-# Default rules for deployment.
-qnx: target.path = /tmp/$${TARGET}/bin
-else: unix:!android: target.path = /opt/$${TARGET}/bin
-!isEmpty(target.path): INSTALLS += target

@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Exec=pkexec fly-admin-raid-manager
+Icon=drive-harddisk-raid
+Name=RAID Manager
+Name[ru]=Менеджер RAID
+Comment=Manage RAID arrays and disk partitions
+Comment[ru]=Управление RAID-массивами и разделами дисков
+Categories=Settings;SystemSetup;
+X-Fly-AdminOnly=true
+StartupNotify=true
+Terminal=false
+MimeType=
+Keywords=raid;disk;partition;storage;array;
+Keywords[ru]=raid;диск;раздел;хранилище;массив;
