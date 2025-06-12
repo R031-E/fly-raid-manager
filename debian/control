@@ -1,0 +1,39 @@
+Source: fly-admin-raid-manager
+Section: fly
+Priority: optional
+Maintainer: Nikita Maz <nikitamaz@hotmail.com>
+Build-Depends: debhelper (>= 9),
+               cdbs,
+               qt5-qmake,
+               qtbase5-dev,
+               libflyintegration-dev,
+               libflycore-dev,
+               libflyui-dev,
+               libflysu-dev,
+               libflyfiledialog-dev,
+               flybuild
+Standards-Version: 4.1.3
+Vcs-Git: https://github.com/R031-E/fly-raid-manager.git
+Vcs-Browser: https://github.com/R031-E/fly-raid-manager
+
+Package: fly-admin-raid-manager
+Architecture: any
+Depends: ${shlibs:Depends},
+         ${misc:Depends},
+         mdadm,
+         parted,
+         util-linux
+Suggests: gparted
+Description: RAID array and disk partition manager for Astra Linux
+ Графический инструмент для управления RAID-массивами и разделами дисков
+ в операционной системе Astra Linux Special Edition.
+ .
+ Возможности:
+  * Создание и удаление RAID-массивов (RAID 0, 1, 5)
+  * Управление устройствами в RAID-массивах
+  * Создание и удаление разделов дисков
+  * Форматирование разделов
+  * Монтирование и размонтирование устройств
+  * Мониторинг состояния RAID-массивов
+ .
+ Программа требует прав администратора для выполнения операций.

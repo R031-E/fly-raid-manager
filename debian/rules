@@ -1,0 +1,10 @@
+#!/usr/bin/make -f
+
+include /usr/share/flybuild/fly.mk
+include /usr/share/cdbs/1/class/qmake.mk
+
+# Дополнительные опции для Qt
+DEB_QMAKE_CONFIG_VAL += release
+
+# Указываем секцию дистрибутива для Fly приложений
+DEB_DH_INSTALL_ARGS = --list-missing

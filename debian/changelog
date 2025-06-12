@@ -1,0 +1,11 @@
+fly-admin-raid-manager (0.0.8-1) unstable; urgency=medium
+
+  * Initial release
+  * RAID array management functionality
+  * Support for RAID 0, 1, and 5
+  * Disk partition management
+  * Device mounting/unmounting
+  * Formatting capabilities
+  * Integration with Astra Linux Fly desktop
+
+ -- Nikita Maz <nikitamaz@hotmail.com>  Mon, 14 May 2025 10:00:00 +0300
