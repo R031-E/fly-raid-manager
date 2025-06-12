@@ -1741,7 +1741,7 @@ void DiskManager::activateSpareDevice(const QString &raidDevice, const QString &
             currentMembers = raid.members.size();
         }
     }
-    int newMembers = currentMembers + 1;
+    //int newMembers = currentMembers + 1;
 
     QStringList args;
     args << "--grow" << raidDevice << "--raid-devices=" + QString::number(currentMembers);

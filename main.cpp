@@ -6,9 +6,7 @@
 #include <flyintegration.h>
 
 /* TODO for MVP:
-     1) reaasemble
      2) фикс размеров
-     3) Перевод на русский
      4) Десктоп энтри
      5) Билд
 */

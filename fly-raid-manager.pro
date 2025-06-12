@@ -1,5 +1,5 @@
 TEMPLATE = app
-TARGET = fly-raid-manager
+TARGET = fly-admin-raid-manager
 
 QT       += core gui
 QT += widgets
