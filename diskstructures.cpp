@@ -55,4 +55,70 @@ QString formatByteSize(qint64 bytes) {
     }
 }
 
+qint64 parseSizeString(const QString &sizeStr) {
+    if (sizeStr.isEmpty() || sizeStr == "-" || sizeStr.isNull()) {
+        return 0;
+    }
+
+    // Регулярное выражение для парсинга размеров
+    // lsblk выводит размеры в бинарных единицах: "1.5T", "500G", "2048M", "1024K", "512B"
+    // Поддерживаем форматы с десятичными разделителями (точка и запятая)
+    QRegularExpression rx(R"((\d+(?:[.,]\d+)?)\s*([KMGTPE]?)i?B?)", QRegularExpression::CaseInsensitiveOption);
+    QRegularExpressionMatch match = rx.match(sizeStr.trimmed());
+
+    if (!match.hasMatch()) {
+        // Попробуем парсить только число (предполагаем кибибайты для RAID)
+        bool ok;
+        qint64 numberOnly = sizeStr.toLongLong(&ok);
+        if (ok) {
+            // Если единица не указана, предполагаем кибибайты (KiB)
+            return numberOnly * 1024;
+        }
+        return 0;
+    }
+
+    QString numberStr = match.captured(1);
+    QString unit = match.captured(2).toUpper();
+
+    // Заменяем запятую на точку для корректного парсинга
+    numberStr.replace(',', '.');
+
+    bool ok;
+    double size = numberStr.toDouble(&ok);
+    if (!ok) {
+        return 0;
+    }
+
+    // Преобразуем в байты на основе единицы измерения
+    qint64 result = 0;
+
+    if (unit.isEmpty()) {
+        // Если единица измерения не указана, предполагаем кибибайты (KiB)
+        result = static_cast<qint64>(size * 1024);
+    } else if (unit == "B") {
+        result = static_cast<qint64>(size);
+    } else if (unit == "K") {
+        // lsblk: K = 1024 байт (бинарный килобайт = KiB)
+        result = static_cast<qint64>(size * 1024);
+    } else if (unit == "M") {
+        // lsblk: M = 1024^2 байт (бинарный мегабайт = MiB)
+        result = static_cast<qint64>(size * 1024 * 1024);
+    } else if (unit == "G") {
+        // lsblk: G = 1024^3 байт (бинарный гигабайт = GiB)
+        result = static_cast<qint64>(size * 1024LL * 1024LL * 1024LL);
+    } else if (unit == "T") {
+        // lsblk: T = 1024^4 байт (бинарный терабайт = TiB)
+        result = static_cast<qint64>(size * 1024LL * 1024LL * 1024LL * 1024LL);
+    } else if (unit == "P") {
+        // lsblk: P = 1024^5 байт (бинарный петабайт = PiB)
+        result = static_cast<qint64>(size * 1024LL * 1024LL * 1024LL * 1024LL * 1024LL);
+    } else if (unit == "E") {
+        // lsblk: E = 1024^6 байт (бинарный эксабайт = EiB)
+        result = static_cast<qint64>(size * 1024LL * 1024LL * 1024LL * 1024LL * 1024LL * 1024LL);
+    } else {
+        // Неизвестная единица измерения, предполагаем кибибайты
+        result = static_cast<qint64>(size * 1024);
+    }
+    return result;
+}
 }

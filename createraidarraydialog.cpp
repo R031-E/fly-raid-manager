@@ -55,7 +55,12 @@ void CreateRaidArrayDialog::populateDeviceTree(const DiskStructure &diskStructur
         // Создаем элемент диска (только для группировки)
         QTreeWidgetItem *diskItem = new QTreeWidgetItem(ui->deviceTree);
         diskItem->setText(0, disk.devicePath);
-        diskItem->setText(1, disk.size);
+
+        // Форматируем размер диска через DiskUtils
+        qint64 diskSizeBytes = DiskUtils::parseSizeString(disk.size);
+        QString formattedDiskSize = DiskUtils::formatByteSize(diskSizeBytes);
+        diskItem->setText(1, formattedDiskSize);
+
         diskItem->setText(2, tr("Disk"));
         diskItem->setText(3, "-");
         diskItem->setText(4, tr("Not selectable"));
@@ -71,7 +76,12 @@ void CreateRaidArrayDialog::populateDeviceTree(const DiskStructure &diskStructur
         for (const PartitionInfo &partition : disk.partitions) {
             QTreeWidgetItem *partitionItem = new QTreeWidgetItem(diskItem);
             partitionItem->setText(0, partition.devicePath);
-            partitionItem->setText(1, partition.size);
+
+            // Форматируем размер раздела через DiskUtils
+            qint64 partitionSizeBytes = DiskUtils::parseSizeString(partition.size);
+            QString formattedPartitionSize = DiskUtils::formatByteSize(partitionSizeBytes);
+            partitionItem->setText(1, formattedPartitionSize);
+
             partitionItem->setText(2, tr("Partition"));
             partitionItem->setText(3, partition.filesystem.isEmpty() ? tr("No filesystem") : partition.filesystem);
             partitionItem->setIcon(0, QIcon::fromTheme("drive-harddisk-partition"));
@@ -114,7 +124,7 @@ void CreateRaidArrayDialog::populateDeviceTree(const DiskStructure &diskStructur
             }
 
             // Добавляем в список кандидатов
-            RaidDeviceCandidate candidate(partition.devicePath, partition.size,
+            RaidDeviceCandidate candidate(partition.devicePath, formattedPartitionSize,
                                         "partition", partition.filesystem);
             candidate.isMounted = isMounted;
             candidate.isInRaid = isInRaid;
@@ -144,7 +154,12 @@ void CreateRaidArrayDialog::populateDeviceTree(const DiskStructure &diskStructur
 
             QTreeWidgetItem *wholeDiskItem = new QTreeWidgetItem(ui->deviceTree);
             wholeDiskItem->setText(0, disk.devicePath);
-            wholeDiskItem->setText(1, disk.size);
+
+            // Форматируем размер диска через DiskUtils
+            qint64 wholeDiskSizeBytes = DiskUtils::parseSizeString(disk.size);
+            QString formattedWholeDiskSize = DiskUtils::formatByteSize(wholeDiskSizeBytes);
+            wholeDiskItem->setText(1, formattedWholeDiskSize);
+
             wholeDiskItem->setText(2, tr("Whole Disk"));
             wholeDiskItem->setText(3, tr("Unpartitioned"));
             wholeDiskItem->setIcon(0, QIcon::fromTheme("drive-harddisk"));
@@ -162,7 +177,7 @@ void CreateRaidArrayDialog::populateDeviceTree(const DiskStructure &diskStructur
                 wholeDiskItem->setForeground(4, QBrush(QColor("#e74c3c"))); // Красный
             }
 
-            RaidDeviceCandidate candidate(disk.devicePath, disk.size, "disk", "");
+            RaidDeviceCandidate candidate(disk.devicePath, formattedWholeDiskSize, "disk", "");
             candidate.isMounted = false;
             candidate.isInRaid = isInRaid;
             m_availableDevices.append(candidate);

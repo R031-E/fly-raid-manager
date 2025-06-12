@@ -5,6 +5,7 @@
 #include <QStringList>
 #include <QVector>
 #include <QMap>
+#include <QRegularExpression>
 
 enum class RaidType {
     UNKNOWN,
@@ -100,6 +101,7 @@ namespace DiskUtils {
 
     // Форматирование размера в читаемый вид
     QString formatByteSize(qint64 bytes);
+    qint64 parseSizeString(const QString &sizeStr);
 }
 
 #endif // DISKSTRUCTURES_H

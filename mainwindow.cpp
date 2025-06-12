@@ -1164,7 +1164,11 @@ QTreeWidgetItem* MainWindow::addDiskToTree(const DiskInfo &disk)
 
     // Устанавливаем данные
     item->setText(0, disk.devicePath);
-    item->setText(1, disk.size);
+
+    // Форматируем размер через DiskUtils
+    qint64 sizeBytes = DiskUtils::parseSizeString(disk.size);
+    QString formattedSize = DiskUtils::formatByteSize(sizeBytes);
+    item->setText(1, formattedSize);
 
     // Иконка диска
     item->setIcon(0, QIcon::fromTheme("drive-harddisk"));
@@ -1178,10 +1182,32 @@ QTreeWidgetItem* MainWindow::addPartitionToTree(QTreeWidgetItem* parentItem, con
 
     // Устанавливаем данные
     item->setText(0, partition.devicePath);
-    item->setText(1, partition.size);
+
+    // Форматируем размер через DiskUtils
+    qint64 sizeBytes = DiskUtils::parseSizeString(partition.size);
+    QString formattedSize = DiskUtils::formatByteSize(sizeBytes);
+    item->setText(1, formattedSize);
+
     item->setText(2, partition.filesystem);
-    item->setText(3, partition.used);
-    item->setText(4, partition.available);
+
+    // Форматируем используемое пространство
+    if (!partition.used.isEmpty() && partition.used != "-") {
+        qint64 usedBytes = DiskUtils::parseSizeString(partition.used);
+        QString formattedUsed = DiskUtils::formatByteSize(usedBytes);
+        item->setText(3, formattedUsed);
+    } else {
+        item->setText(3, "-");
+    }
+
+    // Форматируем свободное пространство
+    if (!partition.available.isEmpty() && partition.available != "-") {
+        qint64 availableBytes = DiskUtils::parseSizeString(partition.available);
+        QString formattedAvailable = DiskUtils::formatByteSize(availableBytes);
+        item->setText(4, formattedAvailable);
+    } else {
+        item->setText(4, "-");
+    }
+
     item->setText(5, partition.mountPoint);
     item->setText(6, partition.flags.join(", "));
 
@@ -1204,7 +1230,11 @@ QTreeWidgetItem* MainWindow::addRaidToTree(const RaidInfo &raid)
 
     // Устанавливаем данные
     item->setText(0, raid.devicePath);
-    item->setText(1, raid.size);
+
+    // Форматируем размер через DiskUtils
+    qint64 sizeBytes = DiskUtils::parseSizeString(raid.size);
+    QString formattedSize = DiskUtils::formatByteSize(sizeBytes);
+    item->setText(1, formattedSize);
 
     // В зависимости от режима отображения устанавливаем разные колонки
     if (m_showAllDevices) {
